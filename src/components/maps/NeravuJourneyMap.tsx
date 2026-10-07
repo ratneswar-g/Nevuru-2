@@ -307,18 +307,22 @@ export const NeravuJourneyMap: React.FC<NeravuJourneyMapProps> = ({
               </div>
             </AdvancedMarker>
 
-            {/* Care Partner Marker (Truthfully labeled as booking location) */}
+            {/* Care Partner Marker (Live location when active, otherwise truthful leg anchor) */}
             {showCarePartnerLocation && journey.carePartnerId && (
               <AdvancedMarker
                 position={{
-                  lat: isAtHospital
+                  lat: journey.liveLocation
+                    ? journey.liveLocation.latitude
+                    : isAtHospital
                     ? journey.hospitalDestination.latitude
                     : isLeg2Active
                     ? (journey.hospitalDestination.latitude + journey.returnDropoffLocation.latitude) / 2
                     : isLeg1Active
                     ? (journey.pickupLocation.latitude + journey.hospitalDestination.latitude) / 2
                     : journey.pickupLocation.latitude,
-                  lng: isAtHospital
+                  lng: journey.liveLocation
+                    ? journey.liveLocation.longitude
+                    : isAtHospital
                     ? journey.hospitalDestination.longitude
                     : isLeg2Active
                     ? (journey.hospitalDestination.longitude + journey.returnDropoffLocation.longitude) / 2
@@ -326,9 +330,21 @@ export const NeravuJourneyMap: React.FC<NeravuJourneyMapProps> = ({
                     ? (journey.pickupLocation.longitude + journey.hospitalDestination.longitude) / 2
                     : journey.pickupLocation.longitude,
                 }}
-                title="Care Partner (Location from booking data)"
+                title={
+                  journey.liveLocation
+                    ? `Care Partner (Live GPS${journey.liveLocation.isStale ? ' - Signal Stale' : ''})`
+                    : "Care Partner (Booking Route Anchor)"
+                }
               >
-                <div className="flex items-center justify-center p-1.5 bg-indigo-600 text-white rounded-full shadow-md border-2 border-white ring-2 ring-indigo-200">
+                <div
+                  className={`flex items-center justify-center p-1.5 rounded-full shadow-md border-2 border-white ring-2 ${
+                    journey.liveLocation?.isStale
+                      ? 'bg-amber-600 text-white ring-amber-300'
+                      : journey.liveLocation
+                      ? 'bg-teal-600 text-white ring-teal-300'
+                      : 'bg-indigo-600 text-white ring-indigo-200'
+                  }`}
+                >
                   <Car className="w-4 h-4" />
                 </div>
               </AdvancedMarker>
@@ -355,9 +371,36 @@ export const NeravuJourneyMap: React.FC<NeravuJourneyMapProps> = ({
           </Map>
         </APIProvider>
 
-        {/* Non-fake GPS honesty label */}
-        <div className="absolute bottom-2 left-2 z-10 bg-white/90 backdrop-blur-xs px-2.5 py-1 rounded-md text-[10px] text-slate-600 border border-slate-200 shadow-2xs">
-          Care Partner position: Location from booking data (Live GPS not connected)
+        {/* Live location or booking location status badge */}
+        <div className="absolute bottom-2 left-2 z-10 bg-white/95 backdrop-blur-xs px-2.5 py-1 rounded-md text-[10px] text-slate-700 border border-slate-200 shadow-2xs flex items-center gap-1.5">
+          {journey.liveLocation ? (
+            journey.liveLocation.isStale ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                <span className="font-semibold text-amber-900">
+                  Care Partner GPS Stale: Last update {new Date(journey.liveLocation.updatedAt).toLocaleTimeString()}
+                </span>
+                {journey.liveLocation.etaText && (
+                  <span className="text-slate-500 font-mono">({journey.liveLocation.etaText})</span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span className="font-semibold text-emerald-900">
+                  Live GPS Active: ETA {journey.liveLocation.etaText || 'Calculating...'}
+                </span>
+                {journey.liveLocation.distanceText && (
+                  <span className="text-slate-500 font-mono">({journey.liveLocation.distanceText})</span>
+                )}
+              </>
+            )
+          ) : (
+            <>
+              <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" />
+              <span>Care Partner position: Showing booking route anchor (Awaiting transit GPS)</span>
+            </>
+          )}
         </div>
       </div>
     </div>

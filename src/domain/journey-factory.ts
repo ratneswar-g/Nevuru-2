@@ -17,11 +17,26 @@ export interface CreateJourneyInput {
   scheduledPickupTime?: string;
   specialAssistanceNotes?: string;
   initialFareEstimate?: FareBreakdown;
+  pickupPin?: string;
+}
+
+function generateSecurePickupPin(): string {
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
+      const buf = new Uint32Array(1);
+      globalThis.crypto.getRandomValues(buf);
+      return String(1000 + (buf[0] % 9000));
+    }
+  } catch {
+    // Fallback
+  }
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 export function createRoundTripJourney(input: CreateJourneyInput): Journey {
   const now = new Date().toISOString();
   const id = input.id || `journey-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const pickupPin = input.pickupPin || generateSecurePickupPin();
 
   return {
     id,
@@ -35,6 +50,10 @@ export function createRoundTripJourney(input: CreateJourneyInput): Journey {
     bookingType: input.bookingType || 'ON_DEMAND',
     scheduledPickupTime: input.scheduledPickupTime,
     isRoundTrip: true,
+    pickupPin,
+    pickupPinVerified: false,
+    pickupPinFailedAttempts: 0,
+    pickupPinLockedUntil: null,
     stateHistory: [
       {
         fromState: 'DRAFT',

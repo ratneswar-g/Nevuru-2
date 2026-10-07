@@ -56,6 +56,21 @@ export interface FareBreakdown {
   calculatedAt?: string;
 }
 
+export interface CarePartnerLiveLocation {
+  latitude: number;
+  longitude: number;
+  heading?: number;
+  speed?: number;
+  accuracy?: number;
+  updatedAt: string;
+  etaSeconds?: number;
+  etaText?: string;
+  distanceMeters?: number;
+  distanceText?: string;
+  targetDestination?: string;
+  isStale?: boolean;
+}
+
 export interface Journey {
   id: string;
   patientId: string;
@@ -77,6 +92,11 @@ export interface Journey {
   previousStateBeforeEmergency?: JourneyState;
   emergencyCategory?: EmergencyCategory;
   emergencyReason?: string;
+  pickupPin?: string;
+  pickupPinVerified?: boolean;
+  pickupPinFailedAttempts?: number;
+  pickupPinLockedUntil?: string | null;
+  liveLocation?: CarePartnerLiveLocation | null;
   createdAt: string;
   updatedAt: string;
 }

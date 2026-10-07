@@ -21,8 +21,10 @@ import {
   EmergencyCategory,
   validateEmergencyTrigger,
   EmergencyLogRecord,
+  CarePartnerLiveLocation,
 } from '../domain/index.ts';
-import { AuthUser, authorizeAction } from '../auth/index.ts';
+import { createFallbackRouteLeg } from '../maps/geo-utils.ts';
+import { AuthUser, authorizeAction, getFamilyAccessScope } from '../auth/index.ts';
 
 export interface ITransactionalStore extends IDomainStore {
   driver: {
@@ -348,10 +350,16 @@ export class JourneyService {
     user: AuthUser,
     journeyId: string,
     targetState: JourneyState,
-    note?: string
+    note?: string,
+    metadata?: Record<string, unknown>
   ): Promise<Journey> {
     const journey = await this.store.journeys.findById(journeyId);
     if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
+
+    // If pin provided for PATIENT_PICKED_UP transition, verify server-authoritatively
+    if (targetState === 'PATIENT_PICKED_UP' && metadata?.pin) {
+      return this.verifyPickupPin(user, journeyId, String(metadata.pin));
+    }
 
     // Rule: Patient can trigger RETURN_STARTED from HOSPITAL_VISIT ("Ready to return home")
     if (user.role === 'PATIENT') {
@@ -391,6 +399,288 @@ export class JourneyService {
     await this.store.journeys.save(updated);
     this.notify();
     return updated;
+  }
+
+  /**
+   * Server-authoritative Pickup Verification PIN validation.
+   * Advances the journey from PARTNER_ARRIVED to PATIENT_PICKED_UP only upon entering the correct PIN.
+   * Rate-limits failed PIN attempts and records audit logs for all attempts.
+   */
+  async verifyPickupPin(user: AuthUser, journeyId: string, pin: string): Promise<Journey> {
+    const journey = await this.store.journeys.findById(journeyId);
+    if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
+
+    const isAssignedPartner = user.role === 'CARE_PARTNER' && journey.carePartnerId === user.id;
+    const isAdmin = user.role === 'ADMIN';
+    if (!isAssignedPartner && !isAdmin) {
+      throw new DomainError('UNAUTHORIZED_ACTION', 'Only the assigned Care Partner can verify the patient pickup PIN.');
+    }
+
+    if (journey.currentState !== 'PARTNER_ARRIVED') {
+      throw new DomainError(
+        'INVALID_STATE_TRANSITION',
+        `Pickup PIN verification is only permitted when Care Partner has arrived at the pickup location (PARTNER_ARRIVED). Current state: ${journey.currentState}`
+      );
+    }
+
+    // Rate-limit check: lockout enforcement
+    if (journey.pickupPinLockedUntil) {
+      const lockUntilMs = new Date(journey.pickupPinLockedUntil).getTime();
+      if (lockUntilMs > Date.now()) {
+        const remainingSec = Math.ceil((lockUntilMs - Date.now()) / 1000);
+        if ((this.store as any).auditLogs) {
+          await (this.store as any).auditLogs.log({
+            entityType: 'JOURNEY',
+            entityId: journey.id,
+            action: 'PICKUP_PIN_RATE_LIMITED',
+            actorId: user.id,
+            metadata: { remainingSeconds: remainingSec, lockedUntil: journey.pickupPinLockedUntil },
+          });
+        }
+        throw new DomainError(
+          'PICKUP_PIN_RATE_LIMITED',
+          `Too many failed PIN attempts. Verification is locked. Please try again in ${remainingSec} seconds.`
+        );
+      }
+    }
+
+    const cleanPin = String(pin || '').trim();
+    const expectedPin = String(journey.pickupPin || '').trim();
+    const isMatch = Boolean(expectedPin && cleanPin && cleanPin === expectedPin);
+
+    if (!isMatch) {
+      const failedAttempts = (journey.pickupPinFailedAttempts || 0) + 1;
+      const maxAttempts = 5;
+      let lockedUntil: string | null = null;
+      if (failedAttempts >= maxAttempts) {
+        lockedUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      }
+      journey.pickupPinFailedAttempts = failedAttempts;
+      journey.pickupPinLockedUntil = lockedUntil;
+      await this.store.journeys.save(journey);
+
+      if ((this.store as any).auditLogs) {
+        await (this.store as any).auditLogs.log({
+          entityType: 'JOURNEY',
+          entityId: journey.id,
+          action: 'PICKUP_PIN_FAILED',
+          actorId: user.id,
+          metadata: { failedAttempts, locked: failedAttempts >= maxAttempts },
+        });
+      }
+
+      throw new DomainError(
+        'INVALID_PICKUP_PIN',
+        failedAttempts >= maxAttempts
+          ? 'Incorrect PIN. Maximum failed attempts reached. Pickup verification is locked for 5 minutes.'
+          : `Incorrect pickup verification PIN. Attempt ${failedAttempts} of ${maxAttempts}. Please check with the patient.`
+      );
+    }
+
+    // Correct PIN: reset attempts, mark verified, advance milestone to PATIENT_PICKED_UP
+    journey.pickupPinVerified = true;
+    journey.pickupPinFailedAttempts = 0;
+    journey.pickupPinLockedUntil = null;
+
+    const updated = transitionJourney(journey, 'PATIENT_PICKED_UP', {
+      triggeredByUserId: user.id,
+      note: `Patient identity verified with secure 4-digit pickup PIN by Care Partner ${user.name}.`,
+    });
+    updated.pickupPinVerified = true;
+    updated.pickupPinFailedAttempts = 0;
+    updated.pickupPinLockedUntil = null;
+
+    await this.store.journeys.save(updated);
+
+    if ((this.store as any).auditLogs) {
+      await (this.store as any).auditLogs.log({
+        entityType: 'JOURNEY',
+        entityId: journey.id,
+        action: 'PICKUP_PIN_VERIFIED',
+        actorId: user.id,
+        metadata: { fromState: 'PARTNER_ARRIVED', toState: 'PATIENT_PICKED_UP' },
+      });
+    }
+
+    this.notify();
+    return updated;
+  }
+
+  /**
+   * Updates Care Partner's live geolocation and computes ETA during active transit.
+   * Allowed ONLY during active transit states:
+   * PARTNER_EN_ROUTE, PATIENT_PICKED_UP, IN_TRANSIT_TO_HOSPITAL, RETURN_STARTED, IN_TRANSIT_TO_HOME.
+   * Stops when journey is COMPLETED / CANCELLED / PARTNER_CANCELLED.
+   */
+  async updateLiveLocation(
+    user: AuthUser,
+    journeyId: string,
+    coords: {
+      latitude: number;
+      longitude: number;
+      heading?: number;
+      speed?: number;
+      accuracy?: number;
+    }
+  ): Promise<CarePartnerLiveLocation> {
+    const journey = await this.store.journeys.findById(journeyId);
+    if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
+
+    const isAssigned = user.role === 'CARE_PARTNER' && journey.carePartnerId === user.id;
+    const isAdmin = user.role === 'ADMIN';
+    if (!isAssigned && !isAdmin) {
+      throw new DomainError('UNAUTHORIZED_ACTION', 'Only the assigned Care Partner can submit live location updates.');
+    }
+
+    if (['COMPLETED', 'CANCELLED', 'PARTNER_CANCELLED'].includes(journey.currentState)) {
+      throw new DomainError(
+        'BOOKING_ALREADY_TERMINATED',
+        `Live location tracking is stopped because journey is in terminal state '${journey.currentState}'.`
+      );
+    }
+
+    const TRANSIT_STATES: JourneyState[] = [
+      'PARTNER_EN_ROUTE',
+      'PATIENT_PICKED_UP',
+      'IN_TRANSIT_TO_HOSPITAL',
+      'RETURN_STARTED',
+      'IN_TRANSIT_TO_HOME',
+    ];
+
+    if (!TRANSIT_STATES.includes(journey.currentState)) {
+      throw new DomainError(
+        'INVALID_STATE_FOR_LOCATION_TRACKING',
+        `Live location tracking is only permitted during active transit states (${TRANSIT_STATES.join(', ')}). Current state: ${journey.currentState}`
+      );
+    }
+
+    if (
+      typeof coords.latitude !== 'number' ||
+      typeof coords.longitude !== 'number' ||
+      isNaN(coords.latitude) ||
+      isNaN(coords.longitude) ||
+      coords.latitude < -90 ||
+      coords.latitude > 90 ||
+      coords.longitude < -180 ||
+      coords.longitude > 180
+    ) {
+      throw new DomainError('INVALID_DATA', 'Invalid coordinates. Latitude [-90, 90] and Longitude [-180, 180] are required.');
+    }
+
+    // Determine target destination based on current active transit leg
+    let targetLoc: Location;
+    let targetName: string;
+    if (journey.currentState === 'PARTNER_EN_ROUTE') {
+      targetLoc = journey.pickupLocation;
+      targetName = 'Patient Pickup: ' + journey.pickupLocation.address;
+    } else if (journey.currentState === 'PATIENT_PICKED_UP' || journey.currentState === 'IN_TRANSIT_TO_HOSPITAL') {
+      targetLoc = {
+        latitude: journey.hospitalDestination.latitude,
+        longitude: journey.hospitalDestination.longitude,
+        address: journey.hospitalDestination.address,
+      };
+      targetName = journey.hospitalDestination.name;
+    } else {
+      // RETURN_STARTED or IN_TRANSIT_TO_HOME
+      targetLoc = journey.returnDropoffLocation;
+      targetName = 'Return Drop-Off: ' + journey.returnDropoffLocation.address;
+    }
+
+    const currentLoc: Location = {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      address: `Care Partner GPS (${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)})`,
+    };
+
+    const leg = createFallbackRouteLeg(currentLoc, targetLoc);
+    const now = new Date().toISOString();
+
+    const liveLocation: CarePartnerLiveLocation = {
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      heading: typeof coords.heading === 'number' ? coords.heading : undefined,
+      speed: typeof coords.speed === 'number' ? coords.speed : undefined,
+      accuracy: typeof coords.accuracy === 'number' ? coords.accuracy : undefined,
+      updatedAt: now,
+      etaSeconds: leg.durationSeconds,
+      etaText: leg.durationText,
+      distanceMeters: leg.distanceMeters,
+      distanceText: leg.distanceText,
+      targetDestination: targetName,
+      isStale: false,
+    };
+
+    journey.liveLocation = liveLocation;
+    await this.store.journeys.save(journey);
+    this.notify();
+    return liveLocation;
+  }
+
+  /**
+   * Retrieves Care Partner's live geolocation and ETA for authorized participants.
+   * Validates participant role, applies staleness evaluation, and stops tracking when completed.
+   */
+  async getLiveLocation(
+    user: AuthUser,
+    journeyId: string
+  ): Promise<{
+    liveLocation: CarePartnerLiveLocation | null;
+    trackingActive: boolean;
+    currentState: JourneyState;
+    message?: string;
+  }> {
+    const journey = await this.store.journeys.findById(journeyId);
+    if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
+
+    const patientProfile = await this.getPatientProfile(journey.patientId);
+    const auth = authorizeAction(user, 'VIEW_JOURNEY_LOCATION', {
+      journey,
+      trustedContacts: patientProfile?.trustedContacts,
+    });
+    if (!auth.authorized) {
+      throw new DomainError('UNAUTHORIZED_ACTION', auth.reason || 'You are not authorized to view this journey location');
+    }
+
+    if (user.role === 'FAMILY_CONTACT') {
+      const scope = getFamilyAccessScope(user, journey, patientProfile?.trustedContacts || []);
+      if (!scope.canViewLocationFromBooking && scope.permissionLevel === 'EMERGENCY_ONLY' && journey.currentState !== 'EMERGENCY_ACTIVE') {
+        throw new DomainError('UNAUTHORIZED_ACTION', 'Family contact has emergency-only location access.');
+      }
+    }
+
+    const isTerminated = ['COMPLETED', 'CANCELLED', 'PARTNER_CANCELLED'].includes(journey.currentState);
+    if (isTerminated) {
+      return {
+        liveLocation: null,
+        trackingActive: false,
+        currentState: journey.currentState,
+        message: 'Tracking stopped: journey is completed or cancelled.',
+      };
+    }
+
+    if (!journey.liveLocation) {
+      return {
+        liveLocation: null,
+        trackingActive: true,
+        currentState: journey.currentState,
+        message: 'Awaiting companion GPS signal.',
+      };
+    }
+
+    const STALE_THRESHOLD_MS = 60 * 1000; // 60 seconds
+    const ageMs = Date.now() - new Date(journey.liveLocation.updatedAt).getTime();
+    const isStale = ageMs > STALE_THRESHOLD_MS;
+
+    const liveLocation: CarePartnerLiveLocation = {
+      ...journey.liveLocation,
+      isStale,
+    };
+
+    return {
+      liveLocation,
+      trackingActive: true,
+      currentState: journey.currentState,
+    };
   }
 
   /**

@@ -7,7 +7,7 @@
     "build": "vite build",
     "start": "node server.ts",
     "lint": "tsc --noEmit",
-    "test": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts",
+    "test": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/production-hardening-blockers.test.ts && tsx test/phase-8-pickup-verification-pin.test.ts && tsx test/phase-8-live-location-and-eta.test.ts",
     "test:all": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/auth-and-rbac.test.ts && tsx test/journey-state-machine.test.ts && tsx test/maps-and-routing.test.ts && tsx test/pricing-and-emergency.test.ts && tsx test/role-workflows.test.ts && tsx test/phase-6c-frontend-backend-integration.test.ts",
     "migrate": "tsx src/server/db/migrate.ts"
   },

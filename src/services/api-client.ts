@@ -10,6 +10,7 @@ import {
   CarePartnerProfile,
   FareBreakdown,
   UserRole,
+  CarePartnerLiveLocation,
 } from '../domain/types/index.ts';
 import { AuthSession, AuthUser } from '../auth/types.ts';
 
@@ -440,6 +441,65 @@ export class NeravuApiClient {
     );
     const data = await this.handleResponse<{ success: boolean; journey: Journey }>(res, 'Advance milestone');
     return data.journey;
+  }
+
+  async verifyPickupPin(journeyId: string, pin: string): Promise<Journey> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/journeys/${journeyId}/verify-pickup-pin`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ pin }),
+      },
+      'Verify pickup PIN'
+    );
+    const data = await this.handleResponse<{ success: boolean; verified: boolean; journey: Journey }>(
+      res,
+      'Verify pickup PIN'
+    );
+    return data.journey;
+  }
+
+  async updateLocation(
+    journeyId: string,
+    coords: {
+      latitude: number;
+      longitude: number;
+      heading?: number;
+      speed?: number;
+      accuracy?: number;
+    }
+  ): Promise<CarePartnerLiveLocation> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/journeys/${journeyId}/location`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(coords),
+      },
+      'Update live location'
+    );
+    const data = await this.handleResponse<{ success: boolean; liveLocation: CarePartnerLiveLocation }>(
+      res,
+      'Update live location'
+    );
+    return data.liveLocation;
+  }
+
+  async getLiveLocation(journeyId: string): Promise<{
+    liveLocation: CarePartnerLiveLocation | null;
+    trackingActive: boolean;
+    currentState: JourneyState;
+    message?: string;
+  }> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/journeys/${journeyId}/location`,
+      {
+        headers: this.getHeaders(),
+      },
+      'Get live location'
+    );
+    return this.handleResponse(res, 'Get live location');
   }
 
   async triggerEmergency(

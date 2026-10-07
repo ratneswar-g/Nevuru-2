@@ -38,10 +38,9 @@ export const AdminPortal: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [allJ, currentPolicy, cp1] = await Promise.all([
+      const [allJ, currentPolicy] = await Promise.all([
         neravuApi.getJourneys(),
         neravuApi.getPricingPolicy(),
-        neravuApi.getCarePartnerProfile('dev-user-partner-1'),
       ]);
 
       setJourneys(allJ);
@@ -52,8 +51,14 @@ export const AdminPortal: React.FC = () => {
         if (found) setSelectedJourney(found);
       }
 
-      if (cp1) {
-        setCarePartners([cp1]);
+      const partnerIds = Array.from(new Set(allJ.map((j) => j.carePartnerId).filter(Boolean))) as string[];
+      if (partnerIds.length > 0) {
+        const loadedPartners = await Promise.all(
+          partnerIds.map((id) => neravuApi.getCarePartnerProfile(id).catch(() => null))
+        );
+        setCarePartners(loadedPartners.filter((p): p is CarePartnerProfile => Boolean(p)));
+      } else {
+        setCarePartners([]);
       }
 
       setPricingPolicy(currentPolicy);
@@ -245,10 +250,10 @@ export const AdminPortal: React.FC = () => {
                         {j.id.substring(0, 16)}...
                       </td>
                       <td className="p-3 font-semibold text-slate-900">
-                        {j.patientId === 'dev-user-patient-1' ? '[DEMO] Smt. Lakshmi' : `[DEMO] ${j.patientId}`}
+                        {j.patientId ? `Patient (${j.patientId.slice(0, 12)}...)` : 'Patient'}
                       </td>
                       <td className="p-3 text-slate-600">
-                        {j.carePartnerId ? '[DEMO] Ramesh Kumar' : <span className="text-amber-600 font-medium">Unassigned</span>}
+                        {j.carePartnerId ? `Care Partner (${j.carePartnerId.slice(0, 12)}...)` : <span className="text-amber-600 font-medium">Unassigned</span>}
                       </td>
                       <td className="p-3 text-teal-900 font-medium">
                         {j.hospitalDestination.name}
@@ -358,8 +363,8 @@ export const AdminPortal: React.FC = () => {
             <div key={cp.userId} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <span className="font-bold text-slate-900 block text-sm">Ramesh Kumar</span>
-                  <span className="text-[11px] font-mono text-slate-500">{cp.userId} • +91 98765 43220</span>
+                  <span className="font-bold text-slate-900 block text-sm">Care Partner</span>
+                  <span className="text-[11px] font-mono text-slate-500">{cp.userId}</span>
                 </div>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                   {cp.verificationStatus}

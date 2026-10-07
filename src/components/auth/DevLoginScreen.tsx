@@ -58,8 +58,11 @@ export const DevLoginScreen: React.FC = () => {
   const { availableDevIdentities, loginAsDevRole, requestOtp, verifyOtp, registerUser, isLoading } =
     useAuth();
 
+  const isDevEnvironment =
+    typeof import.meta !== 'undefined' && import.meta.env ? !import.meta.env.PROD : true;
+
   const [step, setStep] = useState<AuthStep>('PHONE_ENTRY');
-  const [phoneNumber, setPhoneNumber] = useState<string>('+919800000001');
+  const [phoneNumber, setPhoneNumber] = useState<string>(isDevEnvironment ? '+919800000001' : '');
   const [referenceId, setReferenceId] = useState<string>('');
   const [otpCode, setOtpCode] = useState<string>('');
   const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
@@ -70,9 +73,6 @@ export const DevLoginScreen: React.FC = () => {
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
-
-  const isDevEnvironment =
-    typeof import.meta !== 'undefined' && import.meta.env ? !import.meta.env.PROD : true;
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -213,35 +213,37 @@ export const DevLoginScreen: React.FC = () => {
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent"
                   />
                   <p className="text-xs text-slate-500 mt-1.5">
-                    Include country code (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded">+919845011111</code> for existing Patient or a new number like <code className="bg-slate-100 px-1 py-0.5 rounded">+919845077777</code> to register).
+                    Include country code (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded">+919876543210</code>).
                   </p>
                 </div>
 
-                {/* Preset phone numbers helper */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
-                    Quick-Fill Registered Phone Numbers
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableDevIdentities.map((identity) => {
-                      const cleanPhone = identity.phone.replace(/[^\d+]/g, '');
-                      return (
-                        <button
-                          key={identity.id}
-                          type="button"
-                          onClick={() => setPhoneNumber(cleanPhone)}
-                          className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                            phoneNumber === cleanPhone
-                              ? 'bg-teal-600 text-white border-teal-600 font-medium'
-                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          {identity.role}: {cleanPhone}
-                        </button>
-                      );
-                    })}
+                {/* Preset phone numbers helper - Development only */}
+                {isDevEnvironment && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                      Quick-Fill Registered Phone Numbers
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {availableDevIdentities.map((identity) => {
+                        const cleanPhone = identity.phone.replace(/[^\d+]/g, '');
+                        return (
+                          <button
+                            key={identity.id}
+                            type="button"
+                            onClick={() => setPhoneNumber(cleanPhone)}
+                            className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                              phoneNumber === cleanPhone
+                                ? 'bg-teal-600 text-white border-teal-600 font-medium'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {identity.role}: {cleanPhone}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <button
                   type="submit"

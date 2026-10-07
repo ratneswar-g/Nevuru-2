@@ -1,0 +1,1 @@
+ALTER TABLE journeys ADD COLUMN IF NOT EXISTS live_location JSONB;

@@ -1,1 +1,104 @@
-var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});import{createServer as createViteServer}from"vite";import path from"node:path";import fs from"node:fs";import dotenv from"dotenv";import{PostgresDatabaseDriver,InMemoryRelationalDriver}from"./src/server/db/driver.ts";import{PostgresDomainStore}from"./src/server/db/repositories/postgres-repositories.ts";import{runMigrations}from"./src/server/db/migrate.ts";import{JourneyService}from"./src/services/journey-service.ts";import{createApiApp}from"./src/server/api/app.ts";dotenv.config();const PORT=parseInt(process.env.PORT||"3000",10);const isProduction=process.env.NODE_ENV==="production";async function bootstrapServer(){console.log("[Neravu Server] Initializing persistence foundation...");let dbDriver;if(process.env.DATABASE_URL||process.env.DATABASE_HOST){console.log("[Neravu Server] PostgreSQL database configuration detected. Initializing pg.Pool...");dbDriver=new PostgresDatabaseDriver;try{await dbDriver.connect();console.log("[Neravu Server] Connected to PostgreSQL. Running database migrations...");await runMigrations(dbDriver)}catch(err){console.error("[Neravu Server] PostgreSQL connection error:",err?.message||err);console.warn("[Neravu Server] Falling back to InMemoryRelationalDriver for local execution.");dbDriver=new InMemoryRelationalDriver}}else{console.log("[Neravu Server] No database configuration found. Initializing InMemoryRelationalDriver for local execution.");dbDriver=new InMemoryRelationalDriver}const domainStore=new PostgresDomainStore(dbDriver);const journeyService=new JourneyService(domainStore);if(!isProduction){console.log("[Neravu Server] Development/Test environment: Seeding initial domain demo fixtures...");await journeyService.seedInitialDomainData()}else{console.log("[Neravu Server] Production environment: Demo data seeding strictly disabled.")}const app=createApiApp(journeyService);if(!isProduction){console.log("[Neravu Server] Mounting Vite development server in middleware mode...");const vite=await createViteServer({server:{middlewareMode:true},appType:"spa"});app.use(vite.middlewares)}else{console.log("[Neravu Server] Production mode: Serving static client assets from dist/...");const distPath=path.resolve(process.cwd(),"dist");if(fs.existsSync(distPath)){const express=(await import("express").then(s=>{const e="default";return s[e]&&typeof s[e]=="object"&&"__esModule"in s[e]?s[e]:s})).default;app.use(express.static(distPath));app.get("*",(_req,res)=>{res.sendFile(path.join(distPath,"index.html"))})}}const server=app.listen(PORT,"0.0.0.0",()=>{console.log(`[Neravu Server] Listening on http://0.0.0.0:${PORT}`);console.log(`[Neravu Server] API Endpoints available at http://0.0.0.0:${PORT}/api/health`)});return{app,server,journeyService,dbDriver}}__name(bootstrapServer,"bootstrapServer");if(import.meta.url===`file://${process.argv[1]}`||process.argv[1]?.endsWith("server.ts")){bootstrapServer().catch(err=>{console.error("[Neravu Server] Bootstrap failed:",err);process.exit(1)})}export{bootstrapServer};
+import { createServer as createViteServer } from "vite";
+import path from "node:path";
+import fs from "node:fs";
+import dotenv from "dotenv";
+import { PostgresDatabaseDriver, InMemoryRelationalDriver } from "./src/server/db/driver.ts";
+import { PostgresDomainStore } from "./src/server/db/repositories/postgres-repositories.ts";
+import { runMigrations } from "./src/server/db/migrate.ts";
+import { JourneyService } from "./src/services/journey-service.ts";
+import { createApiApp } from "./src/server/api/app.ts";
+
+dotenv.config();
+
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const isProduction = process.env.NODE_ENV === "production";
+
+async function bootstrapServer() {
+  console.log("[Neravu Server] Initializing persistence foundation...");
+  let dbDriver;
+  const hasPgConfig = Boolean(process.env.DATABASE_URL || process.env.DATABASE_HOST);
+
+  if (isProduction) {
+    if (!hasPgConfig) {
+      const errMsg = "[Neravu Server] Fatal configuration error: DATABASE_URL is mandatory in production environment. In-memory database fallback is strictly forbidden.";
+      console.error(errMsg);
+      throw new Error(errMsg);
+    }
+    console.log("[Neravu Server] Production environment: PostgreSQL configuration detected. Initializing pg.Pool...");
+    dbDriver = new PostgresDatabaseDriver();
+    try {
+      await dbDriver.connect();
+      console.log("[Neravu Server] Connected to PostgreSQL. Running database migrations...");
+      await runMigrations(dbDriver);
+    } catch (err: any) {
+      const errMsg = `[Neravu Server] Fatal database error: PostgreSQL connection failed in production: ${err?.message || err}. Startup terminated. In-memory fallback is strictly forbidden.`;
+      console.error(errMsg);
+      throw new Error(errMsg);
+    }
+  } else {
+    // Development / test fallback behavior
+    if (hasPgConfig) {
+      console.log("[Neravu Server] PostgreSQL database configuration detected. Initializing pg.Pool...");
+      dbDriver = new PostgresDatabaseDriver();
+      try {
+        await dbDriver.connect();
+        console.log("[Neravu Server] Connected to PostgreSQL. Running database migrations...");
+        await runMigrations(dbDriver);
+      } catch (err: any) {
+        console.error("[Neravu Server] PostgreSQL connection error:", err?.message || err);
+        console.warn("[Neravu Server] Falling back to InMemoryRelationalDriver for local execution.");
+        dbDriver = new InMemoryRelationalDriver();
+      }
+    } else {
+      console.log("[Neravu Server] No database configuration found. Initializing InMemoryRelationalDriver for local execution.");
+      dbDriver = new InMemoryRelationalDriver();
+    }
+  }
+
+  const domainStore = new PostgresDomainStore(dbDriver);
+  const journeyService = new JourneyService(domainStore);
+
+  if (!isProduction) {
+    console.log("[Neravu Server] Development/Test environment: Seeding initial domain demo fixtures...");
+    await journeyService.seedInitialDomainData();
+  } else {
+    console.log("[Neravu Server] Production environment: Demo data seeding strictly disabled.");
+  }
+
+  const app = createApiApp(journeyService);
+
+  if (!isProduction) {
+    console.log("[Neravu Server] Mounting Vite development server in middleware mode...");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    console.log("[Neravu Server] Production mode: Serving static client assets from dist/...");
+    const distPath = path.resolve(process.cwd(), "dist");
+    if (fs.existsSync(distPath)) {
+      const express = (await import("express")).default;
+      app.use(express.static(distPath));
+      app.get("*", (_req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+  }
+
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Neravu Server] Listening on http://0.0.0.0:${PORT}`);
+    console.log(`[Neravu Server] API Endpoints available at http://0.0.0.0:${PORT}/api/health`);
+  });
+
+  return { app, server, journeyService, dbDriver };
+}
+
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("server.ts")) {
+  bootstrapServer().catch((err) => {
+    console.error("[Neravu Server] Bootstrap failed:", err);
+    process.exit(1);
+  });
+}
+
+export { bootstrapServer };

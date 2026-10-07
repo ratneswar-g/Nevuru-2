@@ -8,6 +8,7 @@ import { NeravuJourneyMap } from '../maps/NeravuJourneyMap.tsx';
 import {
   HeartHandshake,
   Car,
+  Key,
   ShieldCheck,
   MapPin,
   CheckCircle2,
@@ -17,6 +18,7 @@ import {
   ShieldAlert,
   Power,
   User,
+  Navigation,
   RefreshCw,
   WifiOff,
 } from 'lucide-react';
@@ -30,6 +32,8 @@ export const CarePartnerPortal: React.FC = () => {
   const [isActionLoading, setIsActionLoading] = useState<boolean>(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [lastSyncedTime, setLastSyncedTime] = useState<string>(new Date().toLocaleTimeString());
+  const [pickupPinInput, setPickupPinInput] = useState<string>('');
+  const [pinError, setPinError] = useState<string | null>(null);
 
   const loadData = async () => {
     if (!currentUser) return;
@@ -66,6 +70,50 @@ export const CarePartnerPortal: React.FC = () => {
     }, 4000);
     return () => clearInterval(interval);
   }, [currentUser]);
+
+  // Live in-transit geolocation tracking
+  // Active states: PARTNER_EN_ROUTE, PATIENT_PICKED_UP, IN_TRANSIT_TO_HOSPITAL, RETURN_STARTED, IN_TRANSIT_TO_HOME
+  useEffect(() => {
+    if (!activeJourney) return;
+    const TRANSIT_STATES: JourneyState[] = [
+      'PARTNER_EN_ROUTE',
+      'PATIENT_PICKED_UP',
+      'IN_TRANSIT_TO_HOSPITAL',
+      'RETURN_STARTED',
+      'IN_TRANSIT_TO_HOME',
+    ];
+    if (!TRANSIT_STATES.includes(activeJourney.currentState)) return;
+
+    let watchId: number | null = null;
+    if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+      const updateLocationToServer = async (pos: GeolocationPosition) => {
+        try {
+          await neravuApi.updateLocation(activeJourney.id, {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            heading: pos.coords.heading ?? undefined,
+            speed: pos.coords.speed ?? undefined,
+            accuracy: pos.coords.accuracy ?? undefined,
+          });
+        } catch {
+          // Non-blocking in case of network dip
+        }
+      };
+
+      navigator.geolocation.getCurrentPosition(updateLocationToServer, () => {});
+      watchId = navigator.geolocation.watchPosition(updateLocationToServer, () => {}, {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 20000,
+      });
+    }
+
+    return () => {
+      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [activeJourney?.id, activeJourney?.currentState]);
 
   if (!currentUser) return null;
 
@@ -110,6 +158,29 @@ export const CarePartnerPortal: React.FC = () => {
       await loadData();
     } catch (err: any) {
       setApiError(err.userFriendlyMessage || err.message || 'Failed to advance milestone.');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // Verify Patient Pickup PIN via backend API
+  const handleVerifyPin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!activeJourney) return;
+    const pin = pickupPinInput.trim();
+    if (!pin || pin.length !== 4) {
+      setPinError('Please enter the complete 4-digit PIN provided by the patient.');
+      return;
+    }
+    setIsActionLoading(true);
+    setPinError(null);
+    setApiError(null);
+    try {
+      await neravuApi.verifyPickupPin(activeJourney.id, pin);
+      setPickupPinInput('');
+      await loadData();
+    } catch (err: any) {
+      setPinError(err.userFriendlyMessage || err.message || 'Incorrect pickup verification PIN.');
     } finally {
       setIsActionLoading(false);
     }
@@ -402,10 +473,24 @@ export const CarePartnerPortal: React.FC = () => {
               <div className="my-5 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
                 <div className="flex items-center justify-between pb-1 border-b border-slate-200">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Location Details (Location shown from booking data)
+                    Location Details (Domain Booking Endpoints)
                   </span>
-                  <span className="text-[10px] text-slate-400 italic">
-                    GPS provider not connected
+                  <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                    {activeJourney.liveLocation ? (
+                      activeJourney.liveLocation.isStale ? (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                          <span>GPS Signal Stale</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-emerald-700 font-semibold">Broadcasting Live Transit GPS</span>
+                        </>
+                      )
+                    ) : (
+                      <span>GPS on stand-by</span>
+                    )}
                   </span>
                 </div>
                 <div>
@@ -423,8 +508,63 @@ export const CarePartnerPortal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Sequential Milestone Action Button */}
-              {nextAction && (
+              {/* Pickup PIN Verification Card for PARTNER_ARRIVED */}
+              {activeJourney.currentState === 'PARTNER_ARRIVED' ? (
+                <div className="p-5 rounded-2xl border-2 border-indigo-400 bg-indigo-50/90 shadow-2xs">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-2xs shrink-0 mt-0.5">
+                      <Key className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 block">
+                        Mandatory Safety Protocol:
+                      </span>
+                      <h3 className="text-sm font-bold text-slate-900 mt-0.5">
+                        Verify Patient 4-Digit Pickup PIN
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        To confirm patient identity and ensure correct dispatch before departure, ask the patient for their 4-digit verification PIN displayed on their screen.
+                      </p>
+
+                      <form onSubmit={handleVerifyPin} className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={4}
+                            autoComplete="one-time-code"
+                            value={pickupPinInput}
+                            onChange={(e) => {
+                              setPickupPinInput(e.target.value.replace(/\D/g, '').slice(0, 4));
+                              if (pinError) setPinError(null);
+                            }}
+                            placeholder="Enter 4-digit PIN"
+                            className="w-full px-4 py-2.5 rounded-xl border border-indigo-300 bg-white font-mono text-base font-bold tracking-widest text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-2xs"
+                            disabled={isActionLoading}
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isActionLoading || pickupPinInput.trim().length !== 4}
+                          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <ShieldCheck className="w-4 h-4" />
+                          {isActionLoading ? 'Verifying PIN...' : 'Verify PIN & Confirm Pickup'}
+                        </button>
+                      </form>
+
+                      {pinError && (
+                        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 font-medium flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>{pinError}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : nextAction ? (
                 <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 block mb-1">
                     Next Required Operational Milestone:
@@ -450,7 +590,7 @@ export const CarePartnerPortal: React.FC = () => {
                     </button>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Emergency SOS Button for Partner */}
               <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">

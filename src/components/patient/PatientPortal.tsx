@@ -9,6 +9,7 @@ import { EmergencyModal } from '../common/EmergencyModal.tsx';
 import { NeravuJourneyMap } from '../maps/NeravuJourneyMap.tsx';
 import {
   HeartHandshake,
+  Key,
   MapPin,
   Calendar,
   Clock,
@@ -290,6 +291,67 @@ export const PatientPortal: React.FC = () => {
                 </div>
               </div>
 
+              {/* Pickup Verification PIN Card */}
+              {activeJourney.pickupPin && (
+                <div
+                  className={`my-4 p-4 rounded-2xl border transition-all ${
+                    activeJourney.pickupPinVerified
+                      ? 'bg-emerald-50/70 border-emerald-200'
+                      : activeJourney.currentState === 'PARTNER_ARRIVED'
+                      ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-400/50'
+                      : 'bg-indigo-50/70 border-indigo-200'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`p-2.5 rounded-xl shrink-0 ${
+                          activeJourney.pickupPinVerified
+                            ? 'bg-emerald-600 text-white'
+                            : activeJourney.currentState === 'PARTNER_ARRIVED'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-indigo-600 text-white'
+                        }`}
+                      >
+                        {activeJourney.pickupPinVerified ? (
+                          <ShieldCheck className="w-5 h-5" />
+                        ) : (
+                          <Key className="w-5 h-5" />
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                          {activeJourney.pickupPinVerified ? 'Pickup Identity Verified' : 'Pickup Verification PIN'}
+                        </span>
+                        <span className="text-xs text-slate-700">
+                          {activeJourney.pickupPinVerified
+                            ? 'Your Care Partner has successfully verified your pickup PIN.'
+                            : activeJourney.currentState === 'PARTNER_ARRIVED'
+                            ? 'Your Care Partner has arrived! Tell them this 4-digit PIN to begin.'
+                            : 'Share this 4-digit PIN with your Care Partner when they arrive.'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {!activeJourney.pickupPinVerified && (
+                      <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl border border-indigo-300 shadow-2xs font-mono font-black text-xl tracking-widest text-indigo-950 self-start sm:self-auto select-all">
+                        {activeJourney.pickupPin.split('').map((digit, i) => (
+                          <span key={i} className="inline-block px-1.5 py-0.5 bg-indigo-50 rounded text-indigo-900 font-bold border border-indigo-100">
+                            {digit}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {activeJourney.pickupPinVerified && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold font-mono self-start sm:self-auto">
+                        <CheckCircle2 className="w-4 h-4" /> Verified
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Crucial Hospital Visit Accompaniment Card */}
               {activeJourney.currentState === 'HOSPITAL_VISIT' && (
                 <div className="my-5 p-5 bg-teal-50 border-2 border-teal-500 rounded-2xl shadow-xs">
@@ -324,14 +386,84 @@ export const PatientPortal: React.FC = () => {
                 </div>
               )}
 
+              {/* Live Transit & ETA Banner */}
+              {activeJourney.liveLocation && (
+                <div
+                  className={`my-4 p-4 rounded-2xl border transition-all ${
+                    activeJourney.liveLocation.isStale
+                      ? 'bg-amber-50/80 border-amber-300'
+                      : 'bg-emerald-50/80 border-emerald-300 ring-2 ring-emerald-400/40'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`p-2.5 rounded-xl shrink-0 ${
+                          activeJourney.liveLocation.isStale
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-emerald-600 text-white'
+                        }`}
+                      >
+                        <Navigation className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 block">
+                            {activeJourney.liveLocation.isStale
+                              ? 'Care Partner Geolocation (Signal Stale)'
+                              : 'Live Care Partner Geolocation'}
+                          </span>
+                          {!activeJourney.liveLocation.isStale && (
+                            <span className="flex h-2 w-2 relative">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-slate-700">
+                          {activeJourney.liveLocation.targetDestination
+                            ? `Heading towards: ${activeJourney.liveLocation.targetDestination}`
+                            : 'In transit along route'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-2xs self-start sm:self-auto font-mono text-xs">
+                      <div>
+                        <span className="text-[9px] uppercase tracking-wider text-slate-400 block font-sans">
+                          Estimated ETA
+                        </span>
+                        <span className="font-bold text-emerald-800 text-sm">
+                          {activeJourney.liveLocation.etaText || 'Calculating'}
+                        </span>
+                      </div>
+                      {activeJourney.liveLocation.distanceText && (
+                        <div className="border-l border-slate-200 pl-3">
+                          <span className="text-[9px] uppercase tracking-wider text-slate-400 block font-sans">
+                            Distance
+                          </span>
+                          <span className="font-bold text-slate-800">
+                            {activeJourney.liveLocation.distanceText}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Journey Route Summary */}
               <div className="my-5 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-200">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Route Information (Location shown from booking data)
+                    Route Information (Domain Booking Endpoints)
                   </span>
-                  <span className="text-[10px] text-slate-400 italic">
-                    GPS provider not connected in development mode
+                  <span className="text-[10px] text-slate-500">
+                    {activeJourney.liveLocation
+                      ? activeJourney.liveLocation.isStale
+                        ? 'Companion GPS Stale (> 60s)'
+                        : 'Live Companion GPS Active'
+                      : 'Awaiting companion GPS'}
                   </span>
                 </div>
 
@@ -382,10 +514,10 @@ export const PatientPortal: React.FC = () => {
                     </div>
                     <div>
                       <span className="text-xs font-bold text-slate-900 block">
-                        Care Partner: [DEMO] Ramesh Kumar (Test Companion)
+                        Assigned Care Partner
                       </span>
                       <span className="text-[11px] text-slate-600 block">
-                        Verified Non-Clinical Companion • {carePartnerProfile.totalJourneysCompleted} Completed Trips (Demo)
+                        Verified Non-Clinical Companion • {carePartnerProfile.totalJourneysCompleted} Completed Journeys
                       </span>
                       <span className="text-[11px] font-mono text-indigo-700 font-semibold block mt-0.5">
                         Vehicle: {carePartnerProfile.vehicle.make} {carePartnerProfile.vehicle.model} ({carePartnerProfile.vehicle.licensePlate})
