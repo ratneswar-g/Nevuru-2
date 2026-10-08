@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import { neravuApi } from '../../services/api-client.ts';
-import { Journey, CarePartnerProfile, JourneyState } from '../../domain/types/index.ts';
+import { Journey, CarePartnerProfile, JourneyState, CarePartnerComplianceSummary, ComplianceDocument, ComplianceDocumentType } from '../../domain/types/index.ts';
 import { JourneyTimeline } from '../common/JourneyTimeline.tsx';
 import { EmergencyModal } from '../common/EmergencyModal.tsx';
 import { NeravuJourneyMap } from '../maps/NeravuJourneyMap.tsx';
@@ -21,11 +21,23 @@ import {
   Navigation,
   RefreshCw,
   WifiOff,
+  FileCheck,
+  FileText,
+  Upload,
+  Plus,
 } from 'lucide-react';
 
 export const CarePartnerPortal: React.FC = () => {
   const { currentUser } = useAuth();
   const [partnerProfile, setPartnerProfile] = useState<CarePartnerProfile | null>(null);
+  const [complianceSummary, setComplianceSummary] = useState<CarePartnerComplianceSummary | null>(null);
+  const [showDocUploadModal, setShowDocUploadModal] = useState<boolean>(false);
+  const [docFormType, setDocFormType] = useState<ComplianceDocumentType>('DRIVING_LICENCE');
+  const [docFormNumber, setDocFormNumber] = useState<string>('');
+  const [docFormExpiry, setDocFormExpiry] = useState<string>('');
+  const [docFormIssue, setDocFormIssue] = useState<string>('');
+  const [docFormSubmitting, setDocFormSubmitting] = useState<boolean>(false);
+  const [docFormError, setDocFormError] = useState<string | null>(null);
   const [activeJourney, setActiveJourney] = useState<Journey | null>(null);
   const [offeredJourneys, setOfferedJourneys] = useState<Journey[]>([]);
   const [isSosOpen, setIsSosOpen] = useState<boolean>(false);
@@ -38,12 +50,14 @@ export const CarePartnerPortal: React.FC = () => {
   const loadData = async () => {
     if (!currentUser) return;
     try {
-      const [profile, journeys] = await Promise.all([
+      const [profile, journeys, compliance] = await Promise.all([
         neravuApi.getCarePartnerProfile(currentUser.id),
         neravuApi.getJourneys(),
+        neravuApi.getCarePartnerCompliance(currentUser.id).catch(() => null),
       ]);
 
       setPartnerProfile(profile);
+      setComplianceSummary(compliance);
 
       // Active journey: Assigned to this partner and not COMPLETED / CANCELLED
       const assigned = journeys.find(
@@ -59,6 +73,39 @@ export const CarePartnerPortal: React.FC = () => {
       setApiError(null);
     } catch (err: any) {
       setApiError(err.userFriendlyMessage || err.message || 'Unable to connect to the Neravu server.');
+    }
+  };
+
+  const handleSubmitDocument = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!docFormNumber || docFormNumber.trim().length < 3) {
+      setDocFormError('Please enter a valid document number or reference.');
+      return;
+    }
+    if (!docFormExpiry) {
+      setDocFormError('Please select a valid expiry date.');
+      return;
+    }
+    setDocFormSubmitting(true);
+    setDocFormError(null);
+    try {
+      const res = await neravuApi.submitComplianceDocument(currentUser.id, {
+        type: docFormType,
+        documentNumber: docFormNumber.trim(),
+        expiryDate: docFormExpiry,
+        issueDate: docFormIssue || undefined,
+      });
+      setComplianceSummary(res.summary);
+      setShowDocUploadModal(false);
+      setDocFormNumber('');
+      setDocFormExpiry('');
+      setDocFormIssue('');
+      await loadData();
+    } catch (err: any) {
+      setDocFormError(err.userFriendlyMessage || err.message || 'Failed to submit compliance document.');
+    } finally {
+      setDocFormSubmitting(false);
     }
   };
 
@@ -628,20 +675,20 @@ export const CarePartnerPortal: React.FC = () => {
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
               <span className="text-[10px] font-bold uppercase text-slate-400 block">Vehicle</span>
               <p className="font-semibold text-slate-900 mt-1">
-                {partnerProfile.vehicle.make} {partnerProfile.vehicle.model} ({partnerProfile.vehicle.year})
+                {partnerProfile.vehicle?.make || 'Standard'} {partnerProfile.vehicle?.model || 'Vehicle'} ({partnerProfile.vehicle?.year || 2024})
               </p>
               <p className="text-[11px] font-mono text-slate-500 mt-0.5">
-                Plate: {partnerProfile.vehicle.licensePlate} • Color: {partnerProfile.vehicle.color}
+                Plate: {partnerProfile.vehicle?.licensePlate || 'N/A'} • Color: {partnerProfile.vehicle?.color || 'White'}
               </p>
             </div>
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
               <span className="text-[10px] font-bold uppercase text-slate-400 block">Accessibility Specs</span>
               <p className="text-slate-700 mt-1">
-                {partnerProfile.vehicle.isWheelchairAccessible ? '✓ Wheelchair Accessible' : 'Standard Ingress'}
+                {partnerProfile.vehicle?.isWheelchairAccessible ? '✓ Wheelchair Accessible' : 'Standard Ingress'}
               </p>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {partnerProfile.vehicle.accommodationsDescription}
+                {partnerProfile.vehicle?.accommodationsDescription || 'Assisted passenger seating'}
               </p>
             </div>
 
@@ -654,6 +701,251 @@ export const CarePartnerPortal: React.FC = () => {
                 Verification: {partnerProfile.verificationStatus}
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compliance & Document Tracking Card */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <FileCheck className="w-4 h-4 text-emerald-600" />
+              Care Partner Compliance & Document Records
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Authoritative tracking of mandatory driving licence, vehicle insurance, and commercial fitness certificate.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {complianceSummary && (
+              <span
+                className={`px-2.5 py-1 text-xs font-bold rounded-full border ${
+                  complianceSummary.overallStatus === 'COMPLIANT'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : complianceSummary.overallStatus === 'NON_COMPLIANT'
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {complianceSummary.overallStatus === 'COMPLIANT'
+                  ? '✓ Fully Compliant'
+                  : complianceSummary.overallStatus === 'NON_COMPLIANT'
+                  ? '⚠ Non-Compliant'
+                  : '⏳ Pending Review'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setDocFormError(null);
+                setShowDocUploadModal(true);
+              }}
+              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 border border-indigo-200 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Submit Document
+            </button>
+          </div>
+        </div>
+
+        {/* Warning if expired mandatory documents */}
+        {complianceSummary && complianceSummary.expiredDocumentTypes.length > 0 && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Mandatory Documents Expired</p>
+              <p className="text-red-600 mt-0.5">
+                The following document(s) have passed their validity period: {complianceSummary.expiredDocumentTypes.join(', ')}.
+                Per safety compliance regulations, new journey dispatches cannot be accepted until valid renewal records are submitted.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Document Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          {[
+            {
+              type: 'DRIVING_LICENCE' as const,
+              title: 'Driving Licence',
+              desc: 'State transport commercial passenger endorsement',
+            },
+            {
+              type: 'VEHICLE_INSURANCE' as const,
+              title: 'Vehicle Insurance',
+              desc: 'Comprehensive commercial passenger vehicle policy',
+            },
+            {
+              type: 'COMMERCIAL_FITNESS_CERTIFICATE' as const,
+              title: 'Fitness Certificate (FC)',
+              desc: 'Regional Transport Office annual fitness inspection',
+            },
+          ].map((item) => {
+            const doc = complianceSummary?.documents.find((d) => d.type === item.type);
+            const isMissing = !doc;
+            const isExpired = doc?.status === 'EXPIRED';
+
+            return (
+              <div
+                key={item.type}
+                className={`p-4 rounded-xl border ${
+                  isExpired
+                    ? 'bg-red-50/50 border-red-200'
+                    : isMissing
+                    ? 'bg-slate-50 border-dashed border-slate-300'
+                    : doc.status === 'VERIFIED'
+                    ? 'bg-emerald-50/30 border-emerald-200'
+                    : 'bg-amber-50/30 border-amber-200'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-slate-900">{item.title}</span>
+                  {doc ? (
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                        doc.status === 'VERIFIED'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : doc.status === 'EXPIRED'
+                          ? 'bg-red-100 text-red-800'
+                          : doc.status === 'REJECTED'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {doc.status}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 text-[10px] font-medium bg-slate-200 text-slate-600 rounded-full">
+                      Not Uploaded
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-500 mb-2">{item.desc}</p>
+
+                {doc ? (
+                  <div className="space-y-1 text-[11px] pt-2 border-t border-slate-200/60">
+                    <p className="font-mono text-slate-700">
+                      Ref: <span className="font-semibold">{doc.documentNumber}</span>
+                    </p>
+                    <p className={isExpired ? 'text-red-700 font-semibold' : 'text-slate-600'}>
+                      Valid until: {doc.expiryDate} {isExpired ? '(EXPIRED)' : ''}
+                    </p>
+                    {doc.issueDate && (
+                      <p className="text-slate-500 text-[10px]">Issued: {doc.issueDate}</p>
+                    )}
+                    {doc.rejectionReason && (
+                      <p className="text-red-600 text-[10px] font-medium mt-1">
+                        Reason: {doc.rejectionReason}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDocFormType(item.type);
+                      setDocFormError(null);
+                      setShowDocUploadModal(true);
+                    }}
+                    className="mt-2 text-indigo-600 hover:text-indigo-800 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                  >
+                    <Upload className="w-3 h-3" />
+                    Submit record now
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Document Submission Modal */}
+      {showDocUploadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
+            <h3 className="text-base font-bold text-slate-900 mb-1 flex items-center gap-2">
+              <Upload className="w-5 h-5 text-indigo-600" />
+              Submit Compliance Document
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Enter official document reference details for operational review and verification.
+            </p>
+
+            {docFormError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs">
+                {docFormError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitDocument} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Document Category</label>
+                <select
+                  value={docFormType}
+                  onChange={(e) => setDocFormType(e.target.value as ComplianceDocumentType)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 bg-white"
+                >
+                  <option value="DRIVING_LICENCE">Driving Licence (Commercial)</option>
+                  <option value="VEHICLE_INSURANCE">Vehicle Insurance Policy</option>
+                  <option value="COMMERCIAL_FITNESS_CERTIFICATE">Commercial Fitness Certificate</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Document Number / Reference</label>
+                <input
+                  type="text"
+                  placeholder="e.g. KA-04-2023-0091823"
+                  value={docFormNumber}
+                  onChange={(e) => setDocFormNumber(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Issue Date (Optional)</label>
+                  <input
+                    type="date"
+                    value={docFormIssue}
+                    onChange={(e) => setDocFormIssue(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Expiry Date</label>
+                  <input
+                    type="date"
+                    value={docFormExpiry}
+                    onChange={(e) => setDocFormExpiry(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-slate-900"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowDocUploadModal(false)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg font-semibold hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={docFormSubmitting}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg font-bold shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  {docFormSubmitting ? 'Submitting...' : 'Submit for Review'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

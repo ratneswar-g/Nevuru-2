@@ -8,3 +8,4 @@ export * from './journey.ts';
 export * from './errors.ts';
 export * from '../pricing/types.ts';
 export * from '../emergency/types.ts';
+export * from './payment.ts';

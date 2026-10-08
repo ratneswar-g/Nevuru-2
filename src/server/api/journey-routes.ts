@@ -327,6 +327,41 @@ function createJourneyRoutes(journeyService) {
     }
   });
 
+  router.get("/:id/emergency", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const { id } = req.params;
+      const journey = await journeyService.getJourneyById(id);
+      if (!journey) {
+        res.status(404).json({ error: "ENTITY_NOT_FOUND", message: `Journey '${id}' not found` });
+        return;
+      }
+
+      const patientProfile = await journeyService.getPatientProfile(journey.patientId);
+      const auth = authorizeAction(user, "VIEW_JOURNEY_EMERGENCY", {
+        journey,
+        trustedContacts: patientProfile?.trustedContacts,
+      });
+      if (!auth.authorized) {
+        res.status(403).json({
+          error: auth.code || "IDOR_VIOLATION",
+          message: auth.reason || "You are not authorized to view this emergency record",
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        journeyId: journey.id,
+        currentState: journey.currentState,
+        isEmergencyActive: journey.currentState === "EMERGENCY_ACTIVE" || journey.currentState === "ESCALATED",
+        emergencyLogs: journey.emergencyLogs,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to retrieve emergency details" });
+    }
+  });
+
   router.post("/:id/emergency", requireAuth, async (req, res) => {
     try {
       const user = req.user;
@@ -334,11 +369,39 @@ function createJourneyRoutes(journeyService) {
       const { category, reason, locationSnapshot } = req.body;
       const updated = await journeyService.triggerEmergency(user, id, { category, reason, locationSnapshot });
       res.json({ success: true, journey: updated });
-    } catch (err) {
+    } catch (err: any) {
       if (err instanceof DomainError) {
-        res.status(400).json({ error: err.code, message: err.message });
+        const statusCode =
+          err.code === "UNAUTHORIZED_ACTION" || err.code === "UNAUTHORIZED_TRANSITION"
+            ? 403
+            : err.code === "ENTITY_NOT_FOUND"
+            ? 404
+            : 400;
+        res.status(statusCode).json({ error: err.code, message: err.message });
       } else {
         res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to trigger emergency" });
+      }
+    }
+  });
+
+  router.post("/:id/emergency/escalate", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const { id } = req.params;
+      const { note } = req.body || {};
+      const updated = await journeyService.escalateEmergency(user, id, note);
+      res.json({ success: true, journey: updated });
+    } catch (err: any) {
+      if (err instanceof DomainError) {
+        const statusCode =
+          err.code === "UNAUTHORIZED_ACTION" || err.code === "UNAUTHORIZED_TRANSITION"
+            ? 403
+            : err.code === "ENTITY_NOT_FOUND"
+            ? 404
+            : 400;
+        res.status(statusCode).json({ error: err.code, message: err.message });
+      } else {
+        res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to escalate emergency" });
       }
     }
   });
@@ -354,7 +417,7 @@ function createJourneyRoutes(journeyService) {
       }
       const updated = await journeyService.resolveEmergency(user, id, operationalResolutionNotes);
       res.json({ success: true, journey: updated });
-    } catch (err) {
+    } catch (err: any) {
       if (err instanceof DomainError) {
         const statusCode = err.code === "UNAUTHORIZED_ACTION" || err.code === "UNAUTHORIZED_TRANSITION" ? 403 : 400;
         res.status(statusCode).json({ error: err.code, message: err.message });

@@ -15,6 +15,13 @@ import {
   CheckCircle2,
   AlertCircle,
   Terminal,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Lock,
+  Activity,
+  Heart,
+  Shield,
 } from 'lucide-react';
 
 const ROLE_CONFIG: Record<
@@ -30,25 +37,25 @@ const ROLE_CONFIG: Record<
     label: 'Patient / Senior',
     description: 'Book door-to-door hospital journeys and request Care Partner accompaniment.',
     icon: UserCheck,
-    badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
   CARE_PARTNER: {
     label: 'Care Partner',
-    description: 'Accept assigned journeys, update milestones, and accompany patients.',
+    description: 'Accept assigned journeys, update milestones, and accompany patients safely.',
     icon: HeartHandshake,
-    badgeColor: 'bg-blue-100 text-blue-800 border-blue-200',
+    badgeColor: 'bg-blue-50 text-blue-700 border-blue-200',
   },
   FAMILY_CONTACT: {
     label: 'Family / Trusted Contact',
     description: 'Track linked patient journeys in real time and receive milestone updates.',
     icon: Users,
-    badgeColor: 'bg-purple-100 text-purple-800 border-purple-200',
+    badgeColor: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ADMIN: {
     label: 'Operations Admin',
-    description: 'Monitor all active journeys, manage Care Partner verification, and handle escalations.',
+    description: 'Monitor active journeys, manage Care Partner verification, and handle escalations.',
     icon: ShieldCheck,
-    badgeColor: 'bg-slate-200 text-slate-900 border-slate-300',
+    badgeColor: 'bg-slate-100 text-slate-800 border-slate-200',
   },
 };
 
@@ -62,7 +69,7 @@ export const DevLoginScreen: React.FC = () => {
     typeof import.meta !== 'undefined' && import.meta.env ? !import.meta.env.PROD : true;
 
   const [step, setStep] = useState<AuthStep>('PHONE_ENTRY');
-  const [phoneNumber, setPhoneNumber] = useState<string>(isDevEnvironment ? '+919800000001' : '');
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
   const [otpCode, setOtpCode] = useState<string>('');
   const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
@@ -73,6 +80,7 @@ export const DevLoginScreen: React.FC = () => {
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [showDevPanel, setShowDevPanel] = useState<boolean>(false);
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,66 +151,79 @@ export const DevLoginScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4 sm:p-6">
-      <div className="max-w-4xl w-full bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        {/* Header */}
-        <div className="bg-slate-900 text-white px-6 py-5 flex items-center justify-between">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-teal-400">
-              Neravu Healthcare Accompaniment Platform
-            </span>
-            <h1 className="text-2xl font-bold tracking-tight mt-0.5">
-              Sign In to Neravu
-            </h1>
-            <p className="text-slate-400 text-sm mt-1">
-              End-to-end Care Partner accompaniment from home to hospital and safely back home.
-            </p>
-          </div>
-          <div className="hidden sm:flex items-center gap-2 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-xs text-slate-300">
-            <ShieldCheck className="w-4 h-4 text-teal-400" />
-            <span>Server-Verified Session Auth</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
-          {/* Left Column: Primary Phone OTP & Registration Flow */}
-          <div className="lg:col-span-7 p-6 sm:p-8">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="p-2 rounded-lg bg-teal-50 text-teal-700 border border-teal-200">
-                {step === 'PHONE_ENTRY' && <Phone className="w-5 h-5" />}
-                {step === 'OTP_VERIFY' && <KeyRound className="w-5 h-5" />}
-                {step === 'REGISTRATION' && <UserPlus className="w-5 h-5" />}
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-teal-50/20 to-slate-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8">
+      <div className="max-w-xl w-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden transition-all duration-300">
+        
+        {/* Brand Header */}
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-teal-950 text-white px-6 sm:px-8 py-7 relative overflow-hidden">
+          <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-48 h-48 bg-teal-500/10 rounded-full blur-2xl pointer-events-none"></div>
+          
+          <div className="flex items-center justify-between relative z-10">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-teal-500/20 border border-teal-400/30 flex items-center justify-center text-teal-400 shadow-inner">
+                <Heart className="w-6 h-6 fill-teal-400/20 text-teal-400" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  {step === 'PHONE_ENTRY' && 'Phone Number Sign-In'}
-                  {step === 'OTP_VERIFY' && 'Verify 6-Digit OTP Code'}
-                  {step === 'REGISTRATION' && 'Complete Your Neravu Profile'}
-                </h2>
-                <p className="text-xs text-slate-500">
-                  {step === 'PHONE_ENTRY' && 'Enter your E.164 mobile number to receive a one-time verification code.'}
-                  {step === 'OTP_VERIFY' && `Verification code sent to ${phoneNumber} (valid for ${Math.ceil(expiresInSeconds / 60)} min).`}
-                  {step === 'REGISTRATION' && `Phone ${phoneNumber} verified. Select your account role to continue.`}
-                </p>
+                <span className="text-[11px] font-bold uppercase tracking-widest text-teal-400">
+                  Neravu Healthcare
+                </span>
+                <h1 className="text-2xl font-bold tracking-tight text-white mt-0.5">
+                  Secure Patient Accompaniment
+                </h1>
               </div>
             </div>
+            <div className="hidden sm:flex items-center gap-1.5 bg-white/10 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-full text-xs text-slate-200">
+              <ShieldCheck className="w-4 h-4 text-teal-400" />
+              <span>Encrypted Session</span>
+            </div>
+          </div>
+          <p className="text-slate-300 text-xs sm:text-sm mt-3 relative z-10 leading-relaxed">
+            Door-to-door compassionate accompaniment from home to hospital and safely back.
+          </p>
+        </div>
 
-            {errorMessage && (
-              <div
-                role="alert"
-                className="mb-5 bg-red-50 border border-red-200 text-red-900 rounded-xl p-3.5 flex items-start gap-2.5 text-xs sm:text-sm"
-              >
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <span>{errorMessage}</span>
-              </div>
-            )}
+        {/* Main Form Content */}
+        <div className="p-6 sm:p-8">
+          <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
+            <div className="p-2.5 rounded-xl bg-teal-50 text-teal-700 border border-teal-100">
+              {step === 'PHONE_ENTRY' && <Phone className="w-5 h-5 text-teal-600" />}
+              {step === 'OTP_VERIFY' && <KeyRound className="w-5 h-5 text-teal-600" />}
+              {step === 'REGISTRATION' && <UserPlus className="w-5 h-5 text-teal-600" />}
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                {step === 'PHONE_ENTRY' && 'Sign In with Mobile Number'}
+                {step === 'OTP_VERIFY' && 'Enter Verification Code'}
+                {step === 'REGISTRATION' && 'Complete Your Profile'}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {step === 'PHONE_ENTRY' && 'Enter your registered mobile number for instant secure access.'}
+                {step === 'OTP_VERIFY' && `6-digit code sent to ${phoneNumber} (valid for ${Math.ceil(expiresInSeconds / 60)}m).`}
+                {step === 'REGISTRATION' && `Number ${phoneNumber} verified successfully. Please choose your role.`}
+              </p>
+            </div>
+          </div>
 
-            {step === 'PHONE_ENTRY' && (
-              <form onSubmit={handleRequestOtp} className="space-y-4">
-                <div>
-                  <label htmlFor="phone-input" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Mobile Phone Number (E.164 Format)
-                  </label>
+          {errorMessage && (
+            <div
+              role="alert"
+              className="mb-6 bg-rose-50 border border-rose-200 text-rose-900 rounded-2xl p-4 flex items-start gap-3 text-xs sm:text-sm shadow-sm animate-fadeIn"
+            >
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{errorMessage}</span>
+            </div>
+          )}
+
+          {step === 'PHONE_ENTRY' && (
+            <form onSubmit={handleRequestOtp} className="space-y-5">
+              <div>
+                <label htmlFor="phone-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  Mobile Phone Number (E.164)
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Phone className="w-4 h-4" />
+                  </div>
                   <input
                     id="phone-input"
                     type="tel"
@@ -210,84 +231,36 @@ export const DevLoginScreen: React.FC = () => {
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="+919845011111"
                     required
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent"
+                    className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 bg-slate-50/50 text-slate-900 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:bg-white transition-all shadow-2xs"
                   />
-                  <p className="text-xs text-slate-500 mt-1.5">
-                    Include country code (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded">+919876543210</code>).
-                  </p>
                 </div>
+                <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
+                  <span>Example format:</span>
+                  <code className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono">+919876543210</code>
+                </p>
+              </div>
 
-                {/* Preset phone numbers helper - Development only */}
-                {isDevEnvironment && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
-                      Quick-Fill Registered Phone Numbers
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {availableDevIdentities.map((identity) => {
-                        const cleanPhone = identity.phone.replace(/[^\d+]/g, '');
-                        return (
-                          <button
-                            key={identity.id}
-                            type="button"
-                            onClick={() => setPhoneNumber(cleanPhone)}
-                            className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                              phoneNumber === cleanPhone
-                                ? 'bg-teal-600 text-white border-teal-600 font-medium'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            {identity.role}: {cleanPhone}
-                          </button>
-                        );
-                      })}
-                    </div>
+              <button
+                type="submit"
+                disabled={submitting || isLoading}
+                className="w-full bg-teal-600 hover:bg-teal-700 active:scale-[0.99] disabled:opacity-50 text-white font-semibold py-3.5 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2 text-sm shadow-md shadow-teal-600/20 cursor-pointer"
+              >
+                <span>{submitting ? 'Sending Code...' : 'Send Verification Code'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+          )}
+
+          {step === 'OTP_VERIFY' && (
+            <form onSubmit={handleVerifyOtp} className="space-y-5">
+              <div>
+                <label htmlFor="otp-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  6-Digit OTP Code
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <KeyRound className="w-4 h-4" />
                   </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={submitting || isLoading}
-                  className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-2.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-xs"
-                >
-                  <span>{submitting ? 'Sending OTP...' : 'Send Verification Code'}</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </form>
-            )}
-
-            {step === 'OTP_VERIFY' && (
-              <form onSubmit={handleVerifyOtp} className="space-y-4">
-                {isDevEnvironment && devOtpPreview && (
-                  <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 text-amber-950 flex items-center justify-between gap-3">
-                    <div className="flex items-start gap-2.5">
-                      <Terminal className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                      <div className="text-xs">
-                        <span className="font-bold uppercase tracking-wider block text-amber-900">
-                          Development Console OTP Preview
-                        </span>
-                        <span className="text-amber-800">
-                          Generated 6-digit code:{' '}
-                          <code className="font-mono font-bold text-sm bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300">
-                            {devOtpPreview}
-                          </code>
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setOtpCode(devOtpPreview)}
-                      className="text-xs font-semibold bg-amber-900 text-white px-2.5 py-1.5 rounded-lg hover:bg-amber-800 shrink-0"
-                    >
-                      Autofill Code
-                    </button>
-                  </div>
-                )}
-
-                <div>
-                  <label htmlFor="otp-input" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    6-Digit Verification Code
-                  </label>
                   <input
                     id="otp-input"
                     type="text"
@@ -297,146 +270,116 @@ export const DevLoginScreen: React.FC = () => {
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
                     placeholder="123456"
                     required
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent"
+                    className="w-full pl-10 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-slate-900 font-mono text-xl tracking-[0.3em] text-center font-bold focus:outline-none focus:ring-2 focus:ring-teal-600 focus:bg-white transition-all shadow-2xs"
                   />
                 </div>
+              </div>
 
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStep('PHONE_ENTRY');
-                      setErrorMessage(null);
-                    }}
-                    className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 text-sm font-medium"
-                  >
-                    Change Number
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting || isLoading || otpCode.length !== 6}
-                    className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-2.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-xs"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{submitting ? 'Verifying...' : 'Verify & Continue'}</span>
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {step === 'REGISTRATION' && (
-              <form onSubmit={handleRegisterUser} className="space-y-4">
-                <div>
-                  <label htmlFor="name-input" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Full Name
-                  </label>
-                  <input
-                    id="name-input"
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g., Meera Krishnan"
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Select Account Role
-                  </label>
-                  <div className="grid grid-cols-1 gap-2.5">
-                    {(['PATIENT', 'CARE_PARTNER', 'FAMILY_CONTACT'] as const).map((roleOption) => {
-                      const cfg = ROLE_CONFIG[roleOption];
-                      const Icon = cfg.icon;
-                      const isSelected = selectedRole === roleOption;
-                      return (
-                        <button
-                          key={roleOption}
-                          type="button"
-                          onClick={() => setSelectedRole(roleOption)}
-                          className={`text-left p-3 rounded-xl border transition-all flex items-start gap-3 ${
-                            isSelected
-                              ? 'border-teal-600 bg-teal-50/50 ring-1 ring-teal-600'
-                              : 'border-slate-200 hover:border-slate-300 bg-white'
-                          }`}
-                        >
-                          <div className={`p-2 rounded-lg border ${cfg.badgeColor}`}>
-                            <Icon className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">{cfg.label}</div>
-                            <div className="text-xs text-slate-600 mt-0.5">{cfg.description}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1.5">
-                    Note: Operations Admin accounts cannot be self-registered and require controlled server-side provisioning.
-                  </p>
-                </div>
-
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep('PHONE_ENTRY');
+                    setErrorMessage(null);
+                  }}
+                  className="px-5 py-3 rounded-2xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  Change Number
+                </button>
                 <button
                   type="submit"
-                  disabled={submitting || isLoading || fullName.trim().length < 2}
-                  className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-2.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm shadow-xs"
+                  disabled={submitting || isLoading || otpCode.length !== 6}
+                  className="flex-1 bg-teal-600 hover:bg-teal-700 active:scale-[0.99] disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2 text-sm shadow-md shadow-teal-600/20 cursor-pointer"
                 >
-                  <UserPlus className="w-4 h-4" />
-                  <span>{submitting ? 'Creating Account...' : 'Complete Registration & Sign In'}</span>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{submitting ? 'Verifying...' : 'Verify & Continue'}</span>
                 </button>
-              </form>
-            )}
-          </div>
+              </div>
+            </form>
+          )}
 
-          {/* Right Column: Non-Production Development Persona Switcher */}
-          {isDevEnvironment && (
-            <div className="lg:col-span-5 p-6 sm:p-8 bg-slate-50/70">
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex items-start gap-2.5 text-amber-900">
-                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="text-xs leading-relaxed">
-                  <span className="font-semibold block">Development Quick-Login (Non-Production)</span>
-                  Instantly provision a server-verified session for a pre-seeded role persona. Disabled in production.
-                </div>
+          {step === 'REGISTRATION' && (
+            <form onSubmit={handleRegisterUser} className="space-y-5">
+              <div>
+                <label htmlFor="name-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  Full Legal Name
+                </label>
+                <input
+                  id="name-input"
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="e.g., Meera Krishnan"
+                  required
+                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-slate-50/50 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 focus:bg-white transition-all shadow-2xs"
+                />
               </div>
 
-              <div className="space-y-2.5">
-                {availableDevIdentities.map((identity) => {
-                  const config = ROLE_CONFIG[identity.role];
-                  const Icon = config.icon;
-                  return (
-                    <button
-                      key={identity.id}
-                      type="button"
-                      disabled={isLoading || submitting}
-                      onClick={() => loginAsDevRole(identity.role)}
-                      className="w-full text-left p-3.5 rounded-xl bg-white border border-slate-200 hover:border-teal-600 hover:bg-teal-50/30 transition-all group flex items-center justify-between gap-3 disabled:opacity-50"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className={`p-2 rounded-lg border shrink-0 ${config.badgeColor}`}>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  Select Account Role
+                </label>
+                <div className="grid grid-cols-1 gap-2.5">
+                  {(['PATIENT', 'CARE_PARTNER', 'FAMILY_CONTACT'] as const).map((roleOption) => {
+                    const cfg = ROLE_CONFIG[roleOption];
+                    const Icon = cfg.icon;
+                    const isSelected = selectedRole === roleOption;
+                    return (
+                      <button
+                        key={roleOption}
+                        type="button"
+                        onClick={() => setSelectedRole(roleOption)}
+                        className={`text-left p-3.5 rounded-2xl border transition-all flex items-start gap-3.5 cursor-pointer ${
+                          isSelected
+                            ? 'border-teal-600 bg-teal-50/60 ring-2 ring-teal-600/20 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className={`p-2.5 rounded-xl border ${cfg.badgeColor} shrink-0 mt-0.5`}>
                           <Icon className="w-4 h-4" />
                         </div>
-                        <div className="min-w-0">
-                          <span
-                            className={`inline-block text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${config.badgeColor}`}
-                          >
-                            {config.label}
-                          </span>
-                          <h3 className="text-sm font-semibold text-slate-900 group-hover:text-teal-900 truncate mt-0.5">
-                            {identity.name}
-                          </h3>
-                          <p className="text-[11px] text-slate-500 font-mono truncate">
-                            {identity.phone}
-                          </p>
+                        <div>
+                          <div className="text-sm font-bold text-slate-900">{cfg.label}</div>
+                          <div className="text-xs text-slate-600 mt-0.5 leading-relaxed">{cfg.description}</div>
                         </div>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-teal-600 shrink-0" />
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-2 italic">
+                  Note: Operations Admin accounts require administrative provisioning.
+                </p>
               </div>
-            </div>
+
+              <button
+                type="submit"
+                disabled={submitting || isLoading || fullName.trim().length < 2}
+                className="w-full bg-teal-600 hover:bg-teal-700 active:scale-[0.99] disabled:opacity-50 text-white font-semibold py-3.5 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2 text-sm shadow-md shadow-teal-600/20 cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>{submitting ? 'Setting Up...' : 'Complete Registration & Sign In'}</span>
+              </button>
+            </form>
           )}
+
+          {/* Trust Badges Footer */}
+          <div className="mt-8 pt-6 border-t border-slate-100 grid grid-cols-3 gap-3 text-center">
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center">
+              <Shield className="w-4 h-4 text-teal-600 mb-1" />
+              <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">CARE PARTNER COMPLIANCE</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">Document & Verification</span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center">
+              <Activity className="w-4 h-4 text-teal-600 mb-1" />
+              <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">LIVE TRACKING</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">Real-Time GPS & ETA</span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center">
+              <Lock className="w-4 h-4 text-teal-600 mb-1" />
+              <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">SECURE JOURNEY</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">Privacy & Emergency Support</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

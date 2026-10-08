@@ -11,6 +11,13 @@ import {
   FareBreakdown,
   UserRole,
   CarePartnerLiveLocation,
+  EmergencyLogRecord,
+  ComplianceDocument,
+  ComplianceDocumentType,
+  CarePartnerComplianceSummary,
+  PaymentOrder,
+  PaymentInvoice,
+  PaymentGatewayConfig,
 } from '../domain/types/index.ts';
 import { AuthSession, AuthUser } from '../auth/types.ts';
 
@@ -537,6 +544,37 @@ export class NeravuApiClient {
     return data.journey;
   }
 
+  async escalateEmergency(journeyId: string, note?: string): Promise<Journey> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/journeys/${journeyId}/emergency/escalate`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ note }),
+      },
+      'Escalate emergency'
+    );
+    const data = await this.handleResponse<{ success: boolean; journey: Journey }>(res, 'Escalate emergency');
+    return data.journey;
+  }
+
+  async getEmergencyDetails(journeyId: string): Promise<{
+    success: boolean;
+    journeyId: string;
+    currentState: JourneyState;
+    isEmergencyActive: boolean;
+    emergencyLogs: EmergencyLogRecord[];
+  }> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/journeys/${journeyId}/emergency`,
+      {
+        headers: this.getHeaders(),
+      },
+      'Get emergency details'
+    );
+    return this.handleResponse(res, 'Get emergency details');
+  }
+
   async getPricingPolicy(): Promise<PricingPolicy> {
     const res = await this.safeFetch(
       `${this.baseUrl}/api/pricing/policy`,
@@ -638,6 +676,181 @@ export class NeravuApiClient {
       'Update care partner availability'
     );
     return data.profile;
+  }
+
+  async getCarePartnerCompliance(partnerId: string): Promise<CarePartnerComplianceSummary> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/users/care-partner/${partnerId}/compliance`,
+      { headers: this.getHeaders() },
+      'Fetch care partner compliance'
+    );
+    const data = await this.handleResponse<{ success: boolean; compliance: CarePartnerComplianceSummary }>(
+      res,
+      'Fetch care partner compliance'
+    );
+    return data.compliance;
+  }
+
+  async submitComplianceDocument(
+    partnerId: string,
+    doc: {
+      type: ComplianceDocumentType;
+      documentNumber: string;
+      expiryDate: string;
+      issueDate?: string;
+    }
+  ): Promise<{ document: ComplianceDocument; summary: CarePartnerComplianceSummary }> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/users/care-partner/${partnerId}/documents`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(doc),
+      },
+      'Submit compliance document'
+    );
+    return this.handleResponse(res, 'Submit compliance document');
+  }
+
+  async reviewComplianceDocument(
+    partnerId: string,
+    docId: string,
+    review: {
+      status: 'VERIFIED' | 'REJECTED';
+      rejectionReason?: string;
+    }
+  ): Promise<{ document: ComplianceDocument; summary: CarePartnerComplianceSummary }> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/users/care-partner/${partnerId}/documents/${docId}/verify`,
+      {
+        method: 'PUT',
+        headers: this.getHeaders(),
+        body: JSON.stringify(review),
+      },
+      'Review compliance document'
+    );
+    return this.handleResponse(res, 'Review compliance document');
+  }
+
+  async getAllCarePartnerCompliance(): Promise<CarePartnerComplianceSummary[]> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/users/care-partners/compliance`,
+      { headers: this.getHeaders() },
+      'Fetch all care partner compliance summaries'
+    );
+    const data = await this.handleResponse<{ success: boolean; carePartners: CarePartnerComplianceSummary[] }>(
+      res,
+      'Fetch all care partner compliance summaries'
+    );
+    return data.carePartners || [];
+  }
+
+  // --- COMMERCIAL PAYMENTS ---
+
+  async getPaymentConfig(): Promise<PaymentGatewayConfig> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/config`,
+      { headers: this.getHeaders() },
+      'Fetch payment config'
+    );
+    const data = await this.handleResponse<{ success: boolean; config: PaymentGatewayConfig }>(
+      res,
+      'Fetch payment config'
+    );
+    return data.config;
+  }
+
+  async createPaymentOrder(journeyId: string, idempotencyKey?: string): Promise<PaymentOrder> {
+    const headers = this.getHeaders();
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/orders`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ journeyId, idempotencyKey }),
+      },
+      'Create payment order'
+    );
+    const data = await this.handleResponse<{ success: boolean; payment: PaymentOrder }>(
+      res,
+      'Create payment order'
+    );
+    return data.payment;
+  }
+
+  async confirmPayment(
+    orderId: string,
+    details: { providerPaymentId: string; providerSignature: string }
+  ): Promise<PaymentOrder> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/orders/${orderId}/confirm`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(details),
+      },
+      'Confirm payment'
+    );
+    const data = await this.handleResponse<{ success: boolean; payment: PaymentOrder }>(
+      res,
+      'Confirm payment'
+    );
+    return data.payment;
+  }
+
+  async getPaymentOrder(orderId: string): Promise<PaymentOrder> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/orders/${orderId}`,
+      { headers: this.getHeaders() },
+      'Fetch payment order'
+    );
+    const data = await this.handleResponse<{ success: boolean; payment: PaymentOrder }>(
+      res,
+      'Fetch payment order'
+    );
+    return data.payment;
+  }
+
+  async getPaymentInvoice(orderId: string): Promise<PaymentInvoice> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/orders/${orderId}/invoice`,
+      { headers: this.getHeaders() },
+      'Fetch payment invoice'
+    );
+    const data = await this.handleResponse<{ success: boolean; invoice: PaymentInvoice }>(
+      res,
+      'Fetch payment invoice'
+    );
+    return data.invoice;
+  }
+
+  async getJourneyPayments(journeyId: string): Promise<PaymentOrder[]> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/journey/${journeyId}`,
+      { headers: this.getHeaders() },
+      'Fetch journey payments'
+    );
+    const data = await this.handleResponse<{ success: boolean; payments: PaymentOrder[] }>(
+      res,
+      'Fetch journey payments'
+    );
+    return data.payments || [];
+  }
+
+  async getAllPaymentsAdmin(): Promise<PaymentOrder[]> {
+    const res = await this.safeFetch(
+      `${this.baseUrl}/api/payments/admin/all`,
+      { headers: this.getHeaders() },
+      'Fetch all payments for admin'
+    );
+    const data = await this.handleResponse<{ success: boolean; payments: PaymentOrder[] }>(
+      res,
+      'Fetch all payments for admin'
+    );
+    return data.payments || [];
   }
 }
 

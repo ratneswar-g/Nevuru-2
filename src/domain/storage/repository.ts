@@ -4,11 +4,15 @@ import {
   CarePartnerProfile,
   HospitalDestination,
   Journey,
+  MANDATORY_COMPLIANCE_DOCUMENTS,
+  PaymentOrder,
 } from '../types/index.ts';
+import { isDocumentExpired } from '../care-partner/compliance.ts';
 
 export interface IUserRepository {
   findById(id: string): Promise<User | null>;
   findByPhone(phone: string): Promise<User | null>;
+  findAll(): Promise<User[]>;
   save(user: User): Promise<User>;
 }
 
@@ -20,6 +24,7 @@ export interface IPatientProfileRepository {
 export interface ICarePartnerProfileRepository {
   findByUserId(userId: string): Promise<CarePartnerProfile | null>;
   findAvailable(): Promise<CarePartnerProfile[]>;
+  findAll(): Promise<CarePartnerProfile[]>;
   save(profile: CarePartnerProfile): Promise<CarePartnerProfile>;
 }
 
@@ -38,6 +43,16 @@ export interface IJourneyRepository {
   save(journey: Journey): Promise<Journey>;
 }
 
+export interface IPaymentRepository {
+  findById(id: string): Promise<PaymentOrder | null>;
+  findByJourneyId(journeyId: string): Promise<PaymentOrder[]>;
+  findByProviderOrderId(providerOrderId: string): Promise<PaymentOrder | null>;
+  findByIdempotencyKey(key: string): Promise<PaymentOrder | null>;
+  findByPatientId(patientId: string): Promise<PaymentOrder[]>;
+  findAll(): Promise<PaymentOrder[]>;
+  save(order: PaymentOrder): Promise<PaymentOrder>;
+}
+
 export class InMemoryUserRepository implements IUserRepository {
   private users = new Map<string, User>();
 
@@ -50,6 +65,10 @@ export class InMemoryUserRepository implements IUserRepository {
       if (u.phone === phone) return u;
     }
     return null;
+  }
+
+  async findAll(): Promise<User[]> {
+    return Array.from(this.users.values());
   }
 
   async save(user: User): Promise<User> {
@@ -81,9 +100,20 @@ export class InMemoryCarePartnerProfileRepository implements ICarePartnerProfile
   }
 
   async findAvailable(): Promise<CarePartnerProfile[]> {
-    return Array.from(this.profiles.values()).filter(
-      (p) => p.availabilityStatus === 'AVAILABLE' && p.verificationStatus === 'VERIFIED'
-    );
+    return Array.from(this.profiles.values()).filter((p) => {
+      if (p.availabilityStatus !== 'AVAILABLE' || p.verificationStatus !== 'VERIFIED') return false;
+      if (p.documents && p.documents.length > 0) {
+        const hasExpired = p.documents.some(
+          (d) => MANDATORY_COMPLIANCE_DOCUMENTS.includes(d.type) && isDocumentExpired(d)
+        );
+        if (hasExpired) return false;
+      }
+      return true;
+    });
+  }
+
+  async findAll(): Promise<CarePartnerProfile[]> {
+    return Array.from(this.profiles.values());
   }
 
   async save(profile: CarePartnerProfile): Promise<CarePartnerProfile> {
@@ -192,6 +222,50 @@ export class InMemoryJourneyRepository implements IJourneyRepository {
   }
 }
 
+export class InMemoryPaymentRepository implements IPaymentRepository {
+  private payments = new Map<string, PaymentOrder>();
+
+  async findById(id: string): Promise<PaymentOrder | null> {
+    return this.payments.get(id) || null;
+  }
+
+  async findByJourneyId(journeyId: string): Promise<PaymentOrder[]> {
+    return Array.from(this.payments.values())
+      .filter((p) => p.journeyId === journeyId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async findByProviderOrderId(providerOrderId: string): Promise<PaymentOrder | null> {
+    return (
+      Array.from(this.payments.values()).find((p) => p.providerOrderId === providerOrderId) || null
+    );
+  }
+
+  async findByIdempotencyKey(key: string): Promise<PaymentOrder | null> {
+    return (
+      Array.from(this.payments.values()).find((p) => p.idempotencyKey === key) || null
+    );
+  }
+
+  async findByPatientId(patientId: string): Promise<PaymentOrder[]> {
+    return Array.from(this.payments.values())
+      .filter((p) => p.patientId === patientId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async findAll(): Promise<PaymentOrder[]> {
+    return Array.from(this.payments.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async save(order: PaymentOrder): Promise<PaymentOrder> {
+    const updated: PaymentOrder = { ...order, updatedAt: new Date().toISOString() };
+    this.payments.set(order.id, updated);
+    return updated;
+  }
+}
+
 /**
  * Unified domain store interface contract.
  */
@@ -201,6 +275,8 @@ export interface IDomainStore {
   carePartners: ICarePartnerProfileRepository;
   hospitals: IHospitalRepository;
   journeys: IJourneyRepository;
+  payments?: IPaymentRepository;
+  auditLogs?: any;
   clear?(): Promise<void>;
 }
 
@@ -213,6 +289,7 @@ export class InMemoryDomainStore implements IDomainStore {
   public carePartners: InMemoryCarePartnerProfileRepository;
   public hospitals: InMemoryHospitalRepository;
   public journeys: InMemoryJourneyRepository;
+  public payments: InMemoryPaymentRepository;
 
   constructor() {
     this.users = new InMemoryUserRepository();
@@ -220,6 +297,7 @@ export class InMemoryDomainStore implements IDomainStore {
     this.carePartners = new InMemoryCarePartnerProfileRepository();
     this.hospitals = new InMemoryHospitalRepository();
     this.journeys = new InMemoryJourneyRepository();
+    this.payments = new InMemoryPaymentRepository();
   }
 
   async clear(): Promise<void> {
@@ -228,5 +306,6 @@ export class InMemoryDomainStore implements IDomainStore {
     this.carePartners = new InMemoryCarePartnerProfileRepository();
     this.hospitals = new InMemoryHospitalRepository();
     this.journeys = new InMemoryJourneyRepository();
+    this.payments = new InMemoryPaymentRepository();
   }
 }

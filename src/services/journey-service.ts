@@ -22,9 +22,20 @@ import {
   validateEmergencyTrigger,
   EmergencyLogRecord,
   CarePartnerLiveLocation,
+  ComplianceDocument,
+  ComplianceDocumentType,
+  ComplianceDocumentStatus,
+  CarePartnerComplianceSummary,
+  MANDATORY_COMPLIANCE_DOCUMENTS,
+  isDocumentExpired,
+  getEffectiveDocumentStatus,
+  validateComplianceDocumentInput,
+  evaluateCarePartnerCompliance,
 } from '../domain/index.ts';
 import { createFallbackRouteLeg } from '../maps/geo-utils.ts';
 import { AuthUser, authorizeAction, getFamilyAccessScope } from '../auth/index.ts';
+import { resolveSmsOtpProvider, NotificationProvider } from '../server/auth/sms-provider.ts';
+import { NotificationService } from './notification-service.ts';
 
 export interface ITransactionalStore extends IDomainStore {
   driver: {
@@ -51,11 +62,15 @@ export type JourneyListener = () => void;
 
 export class JourneyService {
   public store: IDomainStore;
+  public notificationProvider?: NotificationProvider | any;
+  public notificationService: NotificationService;
   private listeners: Set<JourneyListener> = new Set();
   private activePricingPolicy: PricingPolicy = { ...DEFAULT_PRICING_POLICY };
 
-  constructor(customStore?: IDomainStore) {
+  constructor(customStore?: IDomainStore, notificationProvider?: any) {
     this.store = customStore || new PersistentDomainStore();
+    this.notificationProvider = notificationProvider;
+    this.notificationService = new NotificationService(this.store, notificationProvider);
     if (typeof process === 'undefined' || process.env?.NODE_ENV !== 'production') {
       this.seedInitialDomainData();
     }
@@ -285,6 +300,7 @@ export class JourneyService {
     }
 
     this.notify();
+    await this.notificationService.notifyJourneyMilestone(matching, matching.currentState, patient.id).catch(() => {});
     return { journey: matching, isIdempotentReplay: false };
   }
 
@@ -323,6 +339,56 @@ export class JourneyService {
       throw new DomainError('UNAUTHORIZED_TRANSITION', auth.reason || 'Unauthorized to accept journey');
     }
 
+    // Server-authoritative compliance verification:
+    // Expired mandatory documents must prevent accepting new journeys
+    const profile = await this.store.carePartners.findByUserId(partner.id);
+    if (profile) {
+      const compliance = evaluateCarePartnerCompliance(profile);
+      if (compliance.expiredDocumentTypes.length > 0) {
+        await (this.store as any).auditLogs?.log?.({
+          entityType: 'care_partner',
+          entityId: partner.id,
+          action: 'JOURNEY_ACCEPTANCE_BLOCKED_COMPLIANCE_EXPIRED',
+          actorId: partner.id,
+          metadata: {
+            journeyId,
+            expiredDocumentTypes: compliance.expiredDocumentTypes,
+          },
+        });
+        throw new DomainError(
+          'CARE_PARTNER_DOCUMENTS_EXPIRED',
+          `Cannot accept new journey: Mandatory compliance document(s) have expired (${compliance.expiredDocumentTypes.join(', ')}). Valid active documents required.`
+        );
+      }
+
+      if (profile.documents && profile.documents.length > 0) {
+        if (!compliance.isCompliant) {
+          await (this.store as any).auditLogs?.log?.({
+            entityType: 'care_partner',
+            entityId: partner.id,
+            action: 'JOURNEY_ACCEPTANCE_BLOCKED_NON_COMPLIANT',
+            actorId: partner.id,
+            metadata: {
+              journeyId,
+              overallStatus: compliance.overallStatus,
+              missingDocumentTypes: compliance.missingDocumentTypes,
+              pendingDocumentTypes: compliance.pendingDocumentTypes,
+              rejectedDocumentTypes: compliance.rejectedDocumentTypes,
+            },
+          });
+          throw new DomainError(
+            'CARE_PARTNER_NON_COMPLIANT',
+            `Cannot accept new journey: Care Partner compliance status is ${compliance.overallStatus}. All mandatory documents must be verified and active.`
+          );
+        }
+      } else if (profile.verificationStatus !== 'VERIFIED') {
+        throw new DomainError(
+          'CARE_PARTNER_NOT_VERIFIED',
+          'Cannot accept new journey: Care Partner verification status is pending or rejected.'
+        );
+      }
+    }
+
     const assigned = transitionJourney(journey, 'PARTNER_ASSIGNED', {
       triggeredByUserId: partner.id,
       assignedCarePartnerId: partner.id,
@@ -330,7 +396,6 @@ export class JourneyService {
     });
 
     // Update partner status to ON_JOURNEY
-    const profile = await this.store.carePartners.findByUserId(partner.id);
     if (profile) {
       await this.store.carePartners.save({
         ...profile,
@@ -340,6 +405,7 @@ export class JourneyService {
 
     await this.store.journeys.save(assigned);
     this.notify();
+    await this.notificationService.notifyJourneyMilestone(assigned, assigned.currentState, partner.id).catch(() => {});
     return assigned;
   }
 
@@ -398,6 +464,7 @@ export class JourneyService {
 
     await this.store.journeys.save(updated);
     this.notify();
+    await this.notificationService.notifyJourneyMilestone(updated, targetState, user.id).catch(() => {});
     return updated;
   }
 
@@ -503,6 +570,7 @@ export class JourneyService {
     }
 
     this.notify();
+    await this.notificationService.notifyJourneyMilestone(updated, 'PATIENT_PICKED_UP', user.id).catch(() => {});
     return updated;
   }
 
@@ -686,6 +754,8 @@ export class JourneyService {
   /**
    * Activates in-journey emergency workflow.
    * Preserves previous state, journey endpoints, category, and incident context.
+   * Enforces server-authoritative authorization, duplicate suppression,
+   * trusted contact / ops notifications, and audit logging.
    */
   async triggerEmergency(
     user: AuthUser,
@@ -701,17 +771,42 @@ export class JourneyService {
     const journey = await this.store.journeys.findById(journeyId);
     if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
 
+    // 1. Server-authoritative authorization check
+    const auth = authorizeAction(user, 'TRIGGER_EMERGENCY', { journey });
+    if (!auth.authorized) {
+      throw new DomainError('UNAUTHORIZED_ACTION', auth.reason || 'Unauthorized to trigger emergency on this journey');
+    }
+
     const category = typeof options === 'object' ? options.category : undefined;
     const reason = typeof options === 'string' ? options : options?.reason;
     const locationSnapshot = typeof options === 'object' ? options.locationSnapshot : undefined;
+    const assignedCategory = category || 'MEDICAL_EMERGENCY';
 
+    // 2. Prevent duplicate emergency records from repeated requests
+    if (journey.currentState === 'EMERGENCY_ACTIVE' || journey.currentState === 'ESCALATED') {
+      if ((this.store as any).auditLogs) {
+        await (this.store as any).auditLogs.log({
+          entityType: 'journey',
+          entityId: journey.id,
+          action: 'EMERGENCY_DUPLICATE_SUPPRESSED',
+          actorId: user.id,
+          metadata: {
+            journeyId: journey.id,
+            currentState: journey.currentState,
+            attemptedCategory: assignedCategory,
+          },
+        });
+      }
+      return journey;
+    }
+
+    // 3. Validate state transition & category
     const validation = validateEmergencyTrigger(journey, category);
     if (!validation.valid) {
       throw new DomainError('INVALID_STATE_TRANSITION', validation.error || 'Cannot trigger emergency');
     }
 
-    const assignedCategory = category || 'MEDICAL_EMERGENCY';
-
+    // 4. Server-authoritative transition to EMERGENCY_ACTIVE
     const emergencyState = transitionJourney(journey, 'EMERGENCY_ACTIVE', {
       triggeredByUserId: user.id,
       note: reason || `EMERGENCY SOS triggered by ${user.name} (${user.role}) - ${assignedCategory}`,
@@ -719,7 +814,17 @@ export class JourneyService {
 
     const incidentId = `emg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date().toISOString();
+    const activeLocation: Location = locationSnapshot
+      ? locationSnapshot
+      : journey.liveLocation
+      ? {
+          latitude: journey.liveLocation.latitude,
+          longitude: journey.liveLocation.longitude,
+          address: `Live Location (${journey.liveLocation.latitude.toFixed(4)}, ${journey.liveLocation.longitude.toFixed(4)})`,
+        }
+      : journey.pickupLocation;
 
+    // 5. Build full incident record preserving journey, location, destination context
     const incident: EmergencyLogRecord = {
       id: incidentId,
       journeyId: journey.id,
@@ -728,18 +833,146 @@ export class JourneyService {
       triggeredByRole: user.role,
       stateAtTrigger: journey.currentState,
       previousJourneyState: journey.currentState,
-      locationSnapshot: locationSnapshot || journey.pickupLocation,
+      locationSnapshot: activeLocation,
       destinationSnapshot: journey.hospitalDestination,
+      returnDropoffSnapshot: journey.returnDropoffLocation,
       category: assignedCategory,
       description: reason || `SOS button pressed during active journey (${assignedCategory}).`,
       status: 'ACTIVE',
     };
 
     emergencyState.emergencyLogs.push(incident);
-
     await this.store.journeys.save(emergencyState);
+
+    // 6. Notify configured trusted contacts & operations desk via notification abstraction
+    let notifiedContactsCount = 0;
+    const notificationProvider = this.notificationProvider || resolveSmsOtpProvider();
+    if (notificationProvider) {
+      const patient = await this.store.users.findById(journey.patientId);
+      const patientName = patient?.name || 'Patient';
+      const locStr = activeLocation
+        ? `${activeLocation.address || `${activeLocation.latitude}, ${activeLocation.longitude}`}`
+        : 'Location unavailable';
+
+      // (a) Notify configured trusted contacts of the patient
+      try {
+        const patientProfile = await this.store.patientProfiles.findByUserId(journey.patientId);
+        const trustedContacts = patientProfile?.trustedContacts || [];
+        for (const contact of trustedContacts) {
+          if (contact.contactPhone) {
+            try {
+              const alertMsg = `[NERAVU EMERGENCY ALERT] Emergency SOS activated for ${patientName} on Journey ${journey.id}. Category: ${assignedCategory}. Location: ${locStr}. Operations team alerted. (Operational alert - not direct 112 dispatch)`;
+              if (typeof (notificationProvider as any).sendNotification === 'function') {
+                await (notificationProvider as any).sendNotification(contact.contactPhone, alertMsg, incidentId);
+              } else if (typeof (notificationProvider as any).sendOtp === 'function') {
+                await (notificationProvider as any).sendOtp(contact.contactPhone, 'SOS-ALERT', incidentId);
+              }
+              notifiedContactsCount++;
+            } catch (err) {
+              console.warn(`[Emergency SOS] Failed to notify contact ${contact.contactPhone}:`, err);
+            }
+          }
+        }
+      } catch (profileErr) {
+        console.warn('[Emergency SOS] Could not retrieve patient profile contacts:', profileErr);
+      }
+
+      // (b) Notify authorized Neravu operations / admin users
+      try {
+        const allUsers = await this.store.users.findAll();
+        const activeAdmins = allUsers.filter((u) => u.role === 'ADMIN' && u.status === 'ACTIVE');
+        for (const adminUser of activeAdmins) {
+          if (adminUser.phone) {
+            try {
+              const opsMsg = `[NERAVU OPS ALERT] Emergency SOS triggered on Journey ${journey.id} by ${user.name} (${user.role}). Patient: ${patientName}. Category: ${assignedCategory}. Location: ${locStr}. Desk action required.`;
+              if (typeof (notificationProvider as any).sendNotification === 'function') {
+                await (notificationProvider as any).sendNotification(adminUser.phone, opsMsg, incidentId);
+              } else if (typeof (notificationProvider as any).sendOtp === 'function') {
+                await (notificationProvider as any).sendOtp(adminUser.phone, 'SOS-ALERT', incidentId);
+              }
+              notifiedContactsCount++;
+            } catch (err) {
+              console.warn(`[Emergency SOS] Failed to notify admin ${adminUser.phone}:`, err);
+            }
+          }
+        }
+      } catch (adminErr) {
+        console.warn('[Emergency SOS] Could not retrieve admin users for alert:', adminErr);
+      }
+    }
+
+    // 7. Record comprehensive audit information
+    if ((this.store as any).auditLogs) {
+      await (this.store as any).auditLogs.log({
+        entityType: 'journey',
+        entityId: journey.id,
+        action: 'EMERGENCY_TRIGGERED',
+        actorId: user.id,
+        metadata: {
+          journeyId: journey.id,
+          incidentId,
+          category: assignedCategory,
+          stateAtTrigger: journey.currentState,
+          notifiedContactsCount,
+          contactsNotifiedCount: notifiedContactsCount,
+        },
+      });
+    }
+
     this.notify();
     return emergencyState;
+  }
+
+  /**
+   * Escalates an active emergency to ESCALATED state.
+   */
+  async escalateEmergency(
+    user: AuthUser,
+    journeyId: string,
+    operationalEscalationNote?: string
+  ): Promise<Journey> {
+    const journey = await this.store.journeys.findById(journeyId);
+    if (!journey) throw new DomainError('ENTITY_NOT_FOUND', 'Journey not found');
+
+    if (journey.currentState !== 'EMERGENCY_ACTIVE') {
+      throw new DomainError(
+        'INVALID_STATE_TRANSITION',
+        `Cannot escalate journey in ${journey.currentState} state; must be in EMERGENCY_ACTIVE state.`
+      );
+    }
+
+    const auth = authorizeAction(user, 'UPDATE_JOURNEY_MILESTONE', { journey });
+    if (!auth.authorized && user.role !== 'ADMIN') {
+      throw new DomainError('UNAUTHORIZED_ACTION', 'Unauthorized to escalate emergency on this journey');
+    }
+
+    const note = operationalEscalationNote || `Emergency escalated by ${user.name} (${user.role})`;
+    const escalated = transitionJourney(journey, 'ESCALATED', {
+      triggeredByUserId: user.id,
+      note,
+    });
+
+    if (escalated.emergencyLogs.length > 0) {
+      const last = escalated.emergencyLogs[escalated.emergencyLogs.length - 1];
+      last.description = `${last.description || ''} [ESCALATED: ${note}]`.trim();
+    }
+
+    await this.store.journeys.save(escalated);
+    if ((this.store as any).auditLogs) {
+      await (this.store as any).auditLogs.log({
+        entityType: 'journey',
+        entityId: journey.id,
+        action: 'EMERGENCY_ESCALATED',
+        actorId: user.id,
+        metadata: {
+          journeyId: journey.id,
+          note,
+        },
+      });
+    }
+
+    this.notify();
+    return escalated;
   }
 
   /**
@@ -768,6 +1001,21 @@ export class JourneyService {
     }
 
     await this.store.journeys.save(restored);
+
+    if ((this.store as any).auditLogs) {
+      await (this.store as any).auditLogs.log({
+        entityType: 'journey',
+        entityId: journey.id,
+        action: 'EMERGENCY_RESOLVED',
+        actorId: admin.id,
+        metadata: {
+          journeyId: journey.id,
+          resolutionNotes: resolutionNote,
+          resumedState: restored.currentState,
+        },
+      });
+    }
+
     this.notify();
     return restored;
   }
@@ -841,6 +1089,214 @@ export class JourneyService {
     });
     this.notify();
     return updated;
+  }
+
+  /**
+   * Retrieves compliance summary for a Care Partner.
+   * Access restricted to Admin or the Care Partner themselves.
+   */
+  async getCarePartnerComplianceSummary(
+    user: AuthUser,
+    partnerId: string,
+    referenceDate?: Date
+  ): Promise<CarePartnerComplianceSummary> {
+    const isAuthorized = user.role === 'ADMIN' || (user.role === 'CARE_PARTNER' && user.id === partnerId);
+    if (!isAuthorized) {
+      throw new DomainError('UNAUTHORIZED_ACCESS', 'You are not authorized to view compliance documents for this Care Partner.');
+    }
+
+    const profile = await this.store.carePartners.findByUserId(partnerId);
+    if (!profile) {
+      throw new DomainError('ENTITY_NOT_FOUND', `Care Partner profile '${partnerId}' not found`);
+    }
+
+    return evaluateCarePartnerCompliance(profile, referenceDate);
+  }
+
+  /**
+   * Care Partner (or Admin) submits or updates a compliance document.
+   * Automatically deduplicates by document type.
+   */
+  async submitComplianceDocument(
+    user: AuthUser,
+    partnerId: string,
+    input: Partial<ComplianceDocument>
+  ): Promise<{ document: ComplianceDocument; summary: CarePartnerComplianceSummary }> {
+    const isAuthorized = user.role === 'ADMIN' || (user.role === 'CARE_PARTNER' && user.id === partnerId);
+    if (!isAuthorized) {
+      throw new DomainError('UNAUTHORIZED_ACCESS', 'You are not authorized to submit compliance documents for this Care Partner.');
+    }
+
+    const validation = validateComplianceDocumentInput(input);
+    if (!validation.valid) {
+      throw new DomainError('RECORD_VALIDATION_ERROR', validation.error || 'Invalid compliance document data.');
+    }
+
+    const profile = await this.store.carePartners.findByUserId(partnerId);
+    if (!profile) {
+      throw new DomainError('ENTITY_NOT_FOUND', `Care Partner profile '${partnerId}' not found`);
+    }
+
+    const docs = [...(profile.documents || [])];
+    const now = new Date().toISOString();
+    const docType = input.type as ComplianceDocumentType;
+
+    // Avoid duplicate data: check if document of this type already exists
+    const existingIndex = docs.findIndex((d) => d.type === docType);
+    let savedDoc: ComplianceDocument;
+
+    if (existingIndex >= 0) {
+      const existing = docs[existingIndex];
+      savedDoc = {
+        ...existing,
+        documentNumber: input.documentNumber!.trim(),
+        expiryDate: input.expiryDate!,
+        issueDate: input.issueDate,
+        status: 'PENDING',
+        rejectionReason: undefined,
+        updatedAt: now,
+      };
+      docs[existingIndex] = savedDoc;
+    } else {
+      savedDoc = {
+        id: input.id || `doc-${docType.toLowerCase().replace(/_/g, '-')}-${Date.now()}`,
+        carePartnerId: partnerId,
+        type: docType,
+        documentNumber: input.documentNumber!.trim(),
+        issueDate: input.issueDate,
+        expiryDate: input.expiryDate!,
+        status: 'PENDING',
+        createdAt: now,
+        updatedAt: now,
+      };
+      docs.push(savedDoc);
+    }
+
+    const updatedProfile: CarePartnerProfile = {
+      ...profile,
+      documents: docs,
+      updatedAt: now,
+    };
+
+    await this.store.carePartners.save(updatedProfile);
+
+    // Audit logging (sanitized, no sensitive secrets or full license numbers)
+    const maskedRef = savedDoc.documentNumber.length > 4
+      ? `***${savedDoc.documentNumber.slice(-4)}`
+      : '***';
+    await (this.store as any).auditLogs?.log?.({
+      entityType: 'care_partner_document',
+      entityId: savedDoc.id,
+      action: 'COMPLIANCE_DOCUMENT_SUBMITTED',
+      actorId: user.id,
+      metadata: {
+        carePartnerId: partnerId,
+        documentType: savedDoc.type,
+        documentReference: maskedRef,
+        expiryDate: savedDoc.expiryDate,
+      },
+    });
+
+    this.notify();
+    return {
+      document: savedDoc,
+      summary: evaluateCarePartnerCompliance(updatedProfile),
+    };
+  }
+
+  /**
+   * Admin reviews and verifies or rejects a Care Partner compliance document.
+   */
+  async reviewComplianceDocument(
+    admin: AuthUser,
+    partnerId: string,
+    docId: string,
+    review: { status: 'VERIFIED' | 'REJECTED'; rejectionReason?: string }
+  ): Promise<{ document: ComplianceDocument; summary: CarePartnerComplianceSummary }> {
+    if (admin.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN_ROLE', 'Only administrators can review and verify compliance documents.');
+    }
+
+    if (review.status !== 'VERIFIED' && review.status !== 'REJECTED') {
+      throw new DomainError('RECORD_VALIDATION_ERROR', "Review status must be 'VERIFIED' or 'REJECTED'");
+    }
+
+    const profile = await this.store.carePartners.findByUserId(partnerId);
+    if (!profile) {
+      throw new DomainError('ENTITY_NOT_FOUND', `Care Partner profile '${partnerId}' not found`);
+    }
+
+    const docs = [...(profile.documents || [])];
+    const docIndex = docs.findIndex((d) => d.id === docId);
+    if (docIndex === -1) {
+      throw new DomainError('ENTITY_NOT_FOUND', `Compliance document '${docId}' not found for Care Partner '${partnerId}'`);
+    }
+
+    const now = new Date().toISOString();
+    const existingDoc = docs[docIndex];
+    const updatedDoc: ComplianceDocument = {
+      ...existingDoc,
+      status: review.status,
+      verifiedAt: review.status === 'VERIFIED' ? now : undefined,
+      verifiedByAdminId: review.status === 'VERIFIED' ? admin.id : undefined,
+      rejectionReason: review.status === 'REJECTED' ? (review.rejectionReason || 'Document verification failed review criteria.') : undefined,
+      updatedAt: now,
+    };
+    docs[docIndex] = updatedDoc;
+
+    // Check overall compliance status
+    const preSummary = evaluateCarePartnerCompliance({ ...profile, documents: docs });
+    let newVerificationStatus = profile.verificationStatus;
+    if (review.status === 'REJECTED') {
+      newVerificationStatus = 'REJECTED';
+    } else if (
+      preSummary.missingDocumentTypes.length === 0 &&
+      preSummary.expiredDocumentTypes.length === 0 &&
+      preSummary.pendingDocumentTypes.length === 0 &&
+      preSummary.rejectedDocumentTypes.length === 0
+    ) {
+      newVerificationStatus = 'VERIFIED';
+    }
+
+    const updatedProfile: CarePartnerProfile = {
+      ...profile,
+      verificationStatus: newVerificationStatus,
+      documents: docs,
+      updatedAt: now,
+    };
+
+    await this.store.carePartners.save(updatedProfile);
+
+    await (this.store as any).auditLogs?.log?.({
+      entityType: 'care_partner_document',
+      entityId: updatedDoc.id,
+      action: 'COMPLIANCE_DOCUMENT_REVIEWED',
+      actorId: admin.id,
+      metadata: {
+        carePartnerId: partnerId,
+        documentType: updatedDoc.type,
+        reviewStatus: review.status,
+        rejectionReason: updatedDoc.rejectionReason || null,
+        adminId: admin.id,
+      },
+    });
+
+    this.notify();
+    return {
+      document: updatedDoc,
+      summary: evaluateCarePartnerCompliance(updatedProfile),
+    };
+  }
+
+  /**
+   * Retrieves compliance summaries for all Care Partners. Restricted to ADMIN.
+   */
+  async getAllCarePartnerComplianceSummaries(admin: AuthUser): Promise<CarePartnerComplianceSummary[]> {
+    if (admin.role !== 'ADMIN') {
+      throw new DomainError('FORBIDDEN_ROLE', 'Only administrators can view all Care Partner compliance summaries.');
+    }
+    const partners = await this.store.carePartners.findAll();
+    return partners.map((p) => evaluateCarePartnerCompliance(p));
   }
 
   async seedInitialDomainData(): Promise<void> {
@@ -917,6 +1373,48 @@ export class JourneyService {
     }
 
     const existingPartner = await this.store.carePartners.findByUserId('dev-user-partner-1');
+    const defaultPartnerDocs: ComplianceDocument[] = [
+      {
+        id: 'doc-dl-dev-partner-1',
+        carePartnerId: 'dev-user-partner-1',
+        type: 'DRIVING_LICENCE',
+        documentNumber: 'KA-04-2022-0049281',
+        issueDate: '2022-03-15',
+        expiryDate: '2030-03-14',
+        status: 'VERIFIED',
+        verifiedAt: '2026-01-15T10:00:00.000Z',
+        verifiedByAdminId: 'dev-user-admin-1',
+        createdAt: '2026-01-15T09:00:00.000Z',
+        updatedAt: '2026-01-15T10:00:00.000Z',
+      },
+      {
+        id: 'doc-ins-dev-partner-1',
+        carePartnerId: 'dev-user-partner-1',
+        type: 'VEHICLE_INSURANCE',
+        documentNumber: 'POL-COMM-2025-998822',
+        issueDate: '2025-01-10',
+        expiryDate: '2027-01-09',
+        status: 'VERIFIED',
+        verifiedAt: '2026-01-15T10:00:00.000Z',
+        verifiedByAdminId: 'dev-user-admin-1',
+        createdAt: '2026-01-15T09:00:00.000Z',
+        updatedAt: '2026-01-15T10:00:00.000Z',
+      },
+      {
+        id: 'doc-fit-dev-partner-1',
+        carePartnerId: 'dev-user-partner-1',
+        type: 'COMMERCIAL_FITNESS_CERTIFICATE',
+        documentNumber: 'FC-KA03-2025-11029',
+        issueDate: '2025-02-01',
+        expiryDate: '2027-01-31',
+        status: 'VERIFIED',
+        verifiedAt: '2026-01-15T10:00:00.000Z',
+        verifiedByAdminId: 'dev-user-admin-1',
+        createdAt: '2026-01-15T09:00:00.000Z',
+        updatedAt: '2026-01-15T10:00:00.000Z',
+      },
+    ];
+
     if (!existingPartner) {
       // Seed default Care Partner Profile
       const partnerProfile: CarePartnerProfile = {
@@ -933,6 +1431,7 @@ export class JourneyService {
           seatingCapacity: 6,
           accommodationsDescription: '[DEMO] Foldable wheelchair ramp, wide door opening, low ingress step, first aid kit on board.',
         },
+        documents: defaultPartnerDocs,
         ratingAverage: 4.95,
         totalJourneysCompleted: 142,
         firstAidCertified: true,
@@ -941,6 +1440,11 @@ export class JourneyService {
         updatedAt: new Date().toISOString(),
       };
       await this.store.carePartners.save(partnerProfile);
+    } else if (!existingPartner.documents || existingPartner.documents.length === 0) {
+      await this.store.carePartners.save({
+        ...existingPartner,
+        documents: defaultPartnerDocs,
+      });
     }
 
     const existingJourneys = await this.store.journeys.findByPatientId('dev-user-patient-1');

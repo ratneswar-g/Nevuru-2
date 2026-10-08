@@ -10,3 +10,4 @@ export * from './pricing/validation.ts';
 export * from './pricing/pricing-engine.ts';
 export * from './emergency/types.ts';
 export * from './emergency/validation.ts';
+export * from './care-partner/compliance.ts';

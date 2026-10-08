@@ -11,6 +11,7 @@ export type DomainAction =
   | 'CREATE_JOURNEY'
   | 'CANCEL_JOURNEY'
   | 'UPDATE_JOURNEY_MILESTONE'
+  | 'TRIGGER_EMERGENCY'
   | 'VIEW_PATIENT_PROFILE'
   | 'UPDATE_PATIENT_PROFILE'
   | 'UPDATE_PARTNER_AVAILABILITY'
@@ -21,7 +22,11 @@ export type DomainAction =
   | 'DISPATCH_JOURNEY'
   | 'RESOLVE_EMERGENCY'
   | 'VIEW_PRICING'
-  | 'UPDATE_PRICING_POLICY';
+  | 'UPDATE_PRICING_POLICY'
+  | 'CREATE_PAYMENT'
+  | 'VIEW_PAYMENT'
+  | 'CONFIRM_PAYMENT'
+  | 'VIEW_ALL_PAYMENTS';
 
 export interface AuthorizationResult {
   authorized: boolean;
@@ -155,7 +160,8 @@ export function authorizeAction(
     action === 'MANAGE_USERS' ||
     action === 'MANAGE_CARE_PARTNERS' ||
     action === 'DISPATCH_JOURNEY' ||
-    action === 'UPDATE_PRICING_POLICY'
+    action === 'UPDATE_PRICING_POLICY' ||
+    action === 'VIEW_ALL_PAYMENTS'
   ) {
     return {
       authorized: false,
@@ -166,6 +172,18 @@ export function authorizeAction(
 
   // 2. PATIENT ACTIONS
   if (user.role === 'PATIENT') {
+    if (action === 'TRIGGER_EMERGENCY') {
+      if (!resourceContext?.journey) return { authorized: true };
+      if (resourceContext.journey.patientId !== user.id) {
+        return {
+          authorized: false,
+          code: 'IDOR_VIOLATION',
+          reason: 'Patient can only trigger emergency on their own journey.',
+        };
+      }
+      return { authorized: true };
+    }
+
     if (
       action === 'CREATE_JOURNEY' ||
       action === 'VIEW_JOURNEY' ||
@@ -208,6 +226,24 @@ export function authorizeAction(
       return { authorized: true };
     }
 
+    if (action === 'CREATE_PAYMENT' || action === 'VIEW_PAYMENT' || action === 'CONFIRM_PAYMENT') {
+      if (resourceContext?.patientId && resourceContext.patientId !== user.id) {
+        return {
+          authorized: false,
+          code: 'IDOR_VIOLATION',
+          reason: 'Patients can only access payments for their own journeys.',
+        };
+      }
+      if (resourceContext?.journey && resourceContext.journey.patientId !== user.id) {
+        return {
+          authorized: false,
+          code: 'IDOR_VIOLATION',
+          reason: 'Patients can only access payments for their own journeys.',
+        };
+      }
+      return { authorized: true };
+    }
+
     return {
       authorized: false,
       code: 'FORBIDDEN_ROLE',
@@ -217,6 +253,18 @@ export function authorizeAction(
 
   // 3. CARE PARTNER ACTIONS
   if (user.role === 'CARE_PARTNER') {
+    if (action === 'TRIGGER_EMERGENCY') {
+      if (!resourceContext?.journey) return { authorized: true };
+      if (resourceContext.journey.carePartnerId !== user.id) {
+        return {
+          authorized: false,
+          code: 'IDOR_VIOLATION',
+          reason: 'Care Partner can only trigger emergency on a journey assigned to them.',
+        };
+      }
+      return { authorized: true };
+    }
+
     if (action === 'UPDATE_PARTNER_AVAILABILITY') {
       if (resourceContext?.carePartnerId && resourceContext.carePartnerId !== user.id) {
         return {
@@ -267,12 +315,13 @@ export function authorizeAction(
     if (
       action === 'UPDATE_JOURNEY_MILESTONE' ||
       action === 'CANCEL_JOURNEY' ||
-      action === 'CREATE_JOURNEY'
+      action === 'CREATE_JOURNEY' ||
+      action === 'TRIGGER_EMERGENCY'
     ) {
       return {
         authorized: false,
         code: 'READ_ONLY_ACCESS',
-        reason: 'Family contacts hold read-only permissions and cannot modify journey milestones or booking state.',
+        reason: 'Family contacts hold read-only permissions and cannot modify journey milestones or trigger emergencies.',
       };
     }
 

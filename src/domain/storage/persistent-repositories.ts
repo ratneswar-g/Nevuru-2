@@ -4,13 +4,17 @@ import {
   CarePartnerProfile,
   HospitalDestination,
   Journey,
+  MANDATORY_COMPLIANCE_DOCUMENTS,
+  PaymentOrder,
 } from '../types/index.ts';
+import { isDocumentExpired } from '../care-partner/compliance.ts';
 import {
   IUserRepository,
   IPatientProfileRepository,
   ICarePartnerProfileRepository,
   IHospitalRepository,
   IJourneyRepository,
+  IPaymentRepository,
   IDomainStore,
 } from './repository.ts';
 import {
@@ -24,6 +28,7 @@ const PREFIX_PATIENT = 'neravu:patient:';
 const PREFIX_PARTNER = 'neravu:partner:';
 const PREFIX_HOSPITAL = 'neravu:hospital:';
 const PREFIX_JOURNEY = 'neravu:journey:';
+const PREFIX_PAYMENT = 'neravu:payment:';
 
 export class PersistentUserRepository implements IUserRepository {
   constructor(private adapter: IPersistenceStorageAdapter) {}
@@ -97,7 +102,16 @@ export class PersistentCarePartnerProfileRepository implements ICarePartnerProfi
 
   async findAvailable(): Promise<CarePartnerProfile[]> {
     const all = await this.findAll();
-    return all.filter((p) => p.availabilityStatus === 'AVAILABLE' && p.verificationStatus === 'VERIFIED');
+    return all.filter((p) => {
+      if (p.availabilityStatus !== 'AVAILABLE' || p.verificationStatus !== 'VERIFIED') return false;
+      if (p.documents && p.documents.length > 0) {
+        const hasExpired = p.documents.some(
+          (d) => MANDATORY_COMPLIANCE_DOCUMENTS.includes(d.type) && isDocumentExpired(d)
+        );
+        if (hasExpired) return false;
+      }
+      return true;
+    });
   }
 
   async findAll(): Promise<CarePartnerProfile[]> {
@@ -241,6 +255,54 @@ export class PersistentJourneyRepository implements IJourneyRepository {
   }
 }
 
+export class PersistentPaymentRepository implements IPaymentRepository {
+  constructor(private adapter: IPersistenceStorageAdapter) {}
+
+  async findById(id: string): Promise<PaymentOrder | null> {
+    if (!id) return null;
+    return this.adapter.getItem<PaymentOrder>(`${PREFIX_PAYMENT}${id}`);
+  }
+
+  async findByJourneyId(journeyId: string): Promise<PaymentOrder[]> {
+    const all = await this.findAll();
+    return all.filter((p) => p.journeyId === journeyId);
+  }
+
+  async findByProviderOrderId(providerOrderId: string): Promise<PaymentOrder | null> {
+    const all = await this.findAll();
+    return all.find((p) => p.providerOrderId === providerOrderId) || null;
+  }
+
+  async findByIdempotencyKey(key: string): Promise<PaymentOrder | null> {
+    const all = await this.findAll();
+    return all.find((p) => p.idempotencyKey === key) || null;
+  }
+
+  async findByPatientId(patientId: string): Promise<PaymentOrder[]> {
+    const all = await this.findAll();
+    return all.filter((p) => p.patientId === patientId);
+  }
+
+  async findAll(): Promise<PaymentOrder[]> {
+    const keys = await this.adapter.getAllKeys(PREFIX_PAYMENT);
+    const payments: PaymentOrder[] = [];
+    for (const key of keys) {
+      const p = await this.adapter.getItem<PaymentOrder>(key);
+      if (p) payments.push(p);
+    }
+    return payments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async save(order: PaymentOrder): Promise<PaymentOrder> {
+    if (!order || !order.id) {
+      throw new DomainError('RECORD_VALIDATION_ERROR', 'PaymentOrder must have a valid id');
+    }
+    const updated: PaymentOrder = { ...order, updatedAt: new Date().toISOString() };
+    await this.adapter.setItem(`${PREFIX_PAYMENT}${order.id}`, updated);
+    return updated;
+  }
+}
+
 /**
  * Production-oriented domain store utilizing the provider-neutral persistence adapter.
  */
@@ -250,6 +312,7 @@ export class PersistentDomainStore implements IDomainStore {
   public carePartners: PersistentCarePartnerProfileRepository;
   public hospitals: PersistentHospitalRepository;
   public journeys: PersistentJourneyRepository;
+  public payments: PersistentPaymentRepository;
   public adapter: IPersistenceStorageAdapter;
 
   constructor(adapter?: IPersistenceStorageAdapter) {
@@ -259,6 +322,7 @@ export class PersistentDomainStore implements IDomainStore {
     this.carePartners = new PersistentCarePartnerProfileRepository(this.adapter);
     this.hospitals = new PersistentHospitalRepository(this.adapter);
     this.journeys = new PersistentJourneyRepository(this.adapter);
+    this.payments = new PersistentPaymentRepository(this.adapter);
   }
 
   /**

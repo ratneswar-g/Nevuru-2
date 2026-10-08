@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import { neravuApi } from '../../services/api-client.ts';
-import { Journey, CarePartnerProfile, PricingPolicy, EmergencyLogRecord } from '../../domain/types/index.ts';
+import { Journey, CarePartnerProfile, PricingPolicy, EmergencyLogRecord, CarePartnerComplianceSummary, ComplianceDocument, PaymentOrder } from '../../domain/types/index.ts';
 import { DEFAULT_PRICING_POLICY } from '../../domain/index.ts';
 import { NeravuJourneyMap } from '../maps/NeravuJourneyMap.tsx';
 import {
@@ -20,13 +20,25 @@ import {
   ShieldCheck,
   Tag,
   WifiOff,
+  ChevronDown,
+  ChevronUp,
+  XCircle,
+  CreditCard,
+  Receipt,
 } from 'lucide-react';
 
 export const AdminPortal: React.FC = () => {
   const { currentUser } = useAuth();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [carePartners, setCarePartners] = useState<CarePartnerProfile[]>([]);
+  const [complianceMap, setComplianceMap] = useState<Record<string, CarePartnerComplianceSummary>>({});
+  const [expandedPartnerId, setExpandedPartnerId] = useState<string | null>(null);
+  const [rejectingDocId, setRejectingDocId] = useState<string | null>(null);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState<string>('');
+  const [reviewingDocId, setReviewingDocId] = useState<string | null>(null);
+  const [complianceNotice, setComplianceNotice] = useState<string | null>(null);
   const [selectedJourney, setSelectedJourney] = useState<Journey | null>(null);
+  const [payments, setPayments] = useState<PaymentOrder[]>([]);
   const [resolutionNote, setResolutionNote] = useState<string>('Operational incident reviewed by Admin; companion and patient contacted; operational clearance given to resume journey.');
   const [isResolving, setIsResolving] = useState<boolean>(false);
   const [pricingPolicy, setPricingPolicy] = useState<PricingPolicy>({ ...DEFAULT_PRICING_POLICY });
@@ -38,12 +50,15 @@ export const AdminPortal: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [allJ, currentPolicy] = await Promise.all([
+      const [allJ, currentPolicy, complianceList, paymentList] = await Promise.all([
         neravuApi.getJourneys(),
         neravuApi.getPricingPolicy(),
+        neravuApi.getAllCarePartnerCompliance().catch(() => [] as CarePartnerComplianceSummary[]),
+        neravuApi.getAllPaymentsAdmin().catch(() => [] as PaymentOrder[]),
       ]);
 
       setJourneys(allJ);
+      setPayments(paymentList);
       if (allJ.length > 0 && !selectedJourney) {
         setSelectedJourney(allJ[0]);
       } else if (selectedJourney) {
@@ -51,10 +66,19 @@ export const AdminPortal: React.FC = () => {
         if (found) setSelectedJourney(found);
       }
 
-      const partnerIds = Array.from(new Set(allJ.map((j) => j.carePartnerId).filter(Boolean))) as string[];
-      if (partnerIds.length > 0) {
+      const cMap: Record<string, CarePartnerComplianceSummary> = {};
+      for (const c of complianceList) {
+        cMap[c.carePartnerId] = c;
+      }
+      setComplianceMap(cMap);
+
+      const journeyPartnerIds = allJ.map((j) => j.carePartnerId).filter(Boolean) as string[];
+      const compliancePartnerIds = complianceList.map((c) => c.carePartnerId);
+      const allPartnerIds = Array.from(new Set([...journeyPartnerIds, ...compliancePartnerIds]));
+
+      if (allPartnerIds.length > 0) {
         const loadedPartners = await Promise.all(
-          partnerIds.map((id) => neravuApi.getCarePartnerProfile(id).catch(() => null))
+          allPartnerIds.map((id) => neravuApi.getCarePartnerProfile(id).catch(() => null))
         );
         setCarePartners(loadedPartners.filter((p): p is CarePartnerProfile => Boolean(p)));
       } else {
@@ -70,6 +94,31 @@ export const AdminPortal: React.FC = () => {
       setApiError(null);
     } catch (err: any) {
       setApiError(err.userFriendlyMessage || err.message || 'Unable to connect to the Neravu server.');
+    }
+  };
+
+  const handleReviewComplianceDoc = async (
+    partnerId: string,
+    docId: string,
+    status: 'VERIFIED' | 'REJECTED',
+    rejectionReason?: string
+  ) => {
+    setReviewingDocId(docId);
+    setComplianceNotice(null);
+    try {
+      const res = await neravuApi.reviewComplianceDocument(partnerId, docId, {
+        status,
+        rejectionReason,
+      });
+      setComplianceNotice(`Document successfully marked as ${status}. Overall status: ${res.summary.overallStatus}`);
+      setRejectingDocId(null);
+      setRejectionReasonInput('');
+      await loadData();
+      setTimeout(() => setComplianceNotice(null), 5000);
+    } catch (err: any) {
+      setComplianceNotice(err.userFriendlyMessage || err.message || 'Failed to review document.');
+    } finally {
+      setReviewingDocId(null);
     }
   };
 
@@ -353,45 +402,343 @@ export const AdminPortal: React.FC = () => {
 
       {/* Care Partner Fleet & Verification Table */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
-        <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <Car className="w-4 h-4 text-indigo-600" />
-          Care Partner Fleet Status & Verification
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          {carePartners.map((cp) => (
-            <div key={cp.userId} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="font-bold text-slate-900 block text-sm">Care Partner</span>
-                  <span className="text-[11px] font-mono text-slate-500">{cp.userId}</span>
-                </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                  {cp.verificationStatus}
-                </span>
-              </div>
-
-              <div className="pt-2 border-t border-slate-200 grid grid-cols-2 gap-2 text-[11px]">
-                <div>
-                  <span className="text-slate-500">Vehicle:</span>{' '}
-                  <span className="font-medium text-slate-800">{cp.vehicle.make} {cp.vehicle.model}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">License Plate:</span>{' '}
-                  <span className="font-mono font-medium text-slate-800">{cp.vehicle.licensePlate}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Wheelchair Ingress:</span>{' '}
-                  <span className="font-medium text-emerald-700">✓ Ramp Available</span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Duty Status:</span>{' '}
-                  <span className="font-bold text-indigo-700">{cp.availabilityStatus}</span>
-                </div>
-              </div>
-            </div>
-          ))}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Car className="w-4 h-4 text-indigo-600" />
+              Care Partner Fleet Status & Compliance Verification
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Review mandatory driving licence, vehicle insurance, and commercial fitness certificate records.
+            </p>
+          </div>
+          <span className="text-xs text-slate-500">
+            {carePartners.length} {carePartners.length === 1 ? 'Partner' : 'Partners'} Registered
+          </span>
         </div>
+
+        {complianceNotice && (
+          <div className="mb-4 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900 font-medium">
+            {complianceNotice}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 text-xs">
+          {carePartners.map((cp) => {
+            const compliance = complianceMap[cp.userId];
+            const isExpanded = expandedPartnerId === cp.userId;
+
+            return (
+              <div key={cp.userId} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <span className="font-bold text-slate-900 block text-sm">Care Partner</span>
+                      <span className="text-[11px] font-mono text-slate-500">{cp.userId}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        cp.verificationStatus === 'VERIFIED'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : cp.verificationStatus === 'REJECTED'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      Partner: {cp.verificationStatus}
+                    </span>
+
+                    {compliance && (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          compliance.overallStatus === 'COMPLIANT'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : compliance.overallStatus === 'NON_COMPLIANT'
+                            ? 'bg-red-100 text-red-800 border border-red-300'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        }`}
+                      >
+                        Compliance: {compliance.overallStatus}
+                      </span>
+                    )}
+
+                    <button
+                      onClick={() => setExpandedPartnerId(isExpanded ? null : cp.userId)}
+                      className="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      {isExpanded ? (
+                        <>
+                          <ChevronUp className="w-3.5 h-3.5" /> Hide Documents
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="w-3.5 h-3.5" /> Review Documents
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-slate-500">Vehicle:</span>{' '}
+                    <span className="font-medium text-slate-800">{cp.vehicle?.make || 'Maruti Suzuki'} {cp.vehicle?.model || 'Ertiga'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">License Plate:</span>{' '}
+                    <span className="font-mono font-medium text-slate-800">{cp.vehicle?.licensePlate || 'KA 03 DEMO 4821'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Wheelchair Ingress:</span>{' '}
+                    <span className="font-medium text-emerald-700">✓ Accessible</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Duty Status:</span>{' '}
+                    <span className="font-bold text-indigo-700">{cp.availabilityStatus}</span>
+                  </div>
+                </div>
+
+                {/* Expanded Compliance Documents View */}
+                {isExpanded && (
+                  <div className="mt-3 pt-3 border-t border-slate-200 space-y-3">
+                    <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      Mandatory Compliance Records Review
+                    </h4>
+
+                    {compliance && compliance.expiredDocumentTypes.length > 0 && (
+                      <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                        <span>
+                          <strong>Expired Mandatory Documents:</strong> {compliance.expiredDocumentTypes.join(', ')}. Partner cannot accept new journey dispatches.
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {[
+                        { type: 'DRIVING_LICENCE' as const, label: 'Driving Licence (DL)' },
+                        { type: 'VEHICLE_INSURANCE' as const, label: 'Vehicle Insurance' },
+                        { type: 'COMMERCIAL_FITNESS_CERTIFICATE' as const, label: 'Commercial Fitness Certificate (FC)' },
+                      ].map((item) => {
+                        const doc = (compliance?.documents || cp.documents || []).find((d) => d.type === item.type);
+                        const isExpired = doc?.status === 'EXPIRED';
+
+                        return (
+                          <div
+                            key={item.type}
+                            className={`p-3 rounded-lg border text-xs space-y-2 ${
+                              !doc
+                                ? 'bg-slate-100 border-slate-200 opacity-70'
+                                : isExpired
+                                ? 'bg-red-50 border-red-200'
+                                : doc.status === 'VERIFIED'
+                                ? 'bg-emerald-50/50 border-emerald-200'
+                                : doc.status === 'REJECTED'
+                                ? 'bg-red-50/50 border-red-200'
+                                : 'bg-amber-50/50 border-amber-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-800">{item.label}</span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                  !doc
+                                    ? 'bg-slate-200 text-slate-600'
+                                    : isExpired
+                                    ? 'bg-red-100 text-red-800'
+                                    : doc.status === 'VERIFIED'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : doc.status === 'REJECTED'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {!doc ? 'MISSING' : doc.status}
+                              </span>
+                            </div>
+
+                            {doc ? (
+                              <div className="space-y-1 text-[11px]">
+                                <div>
+                                  <span className="text-slate-500">Ref:</span>{' '}
+                                  <span className="font-mono font-medium text-slate-800">{doc.documentNumber}</span>
+                                </div>
+                                {doc.issueDate && (
+                                  <div>
+                                    <span className="text-slate-500">Issued:</span>{' '}
+                                    <span className="text-slate-700">{doc.issueDate}</span>
+                                  </div>
+                                )}
+                                <div>
+                                  <span className="text-slate-500">Expires:</span>{' '}
+                                  <span className={`font-medium ${isExpired ? 'text-red-700 font-bold' : 'text-slate-700'}`}>
+                                    {doc.expiryDate} {isExpired ? '(EXPIRED)' : ''}
+                                  </span>
+                                </div>
+                                {doc.rejectionReason && (
+                                  <div className="text-red-600 text-[10px] italic">
+                                    Reason: {doc.rejectionReason}
+                                  </div>
+                                )}
+
+                                {/* Admin Action Controls */}
+                                <div className="pt-2 border-t border-slate-200 flex items-center gap-1.5">
+                                  {rejectingDocId === doc.id ? (
+                                    <div className="w-full space-y-1.5 pt-1">
+                                      <input
+                                        type="text"
+                                        placeholder="Reason for rejection..."
+                                        value={rejectionReasonInput}
+                                        onChange={(e) => setRejectionReasonInput(e.target.value)}
+                                        className="w-full p-1.5 text-xs bg-white border border-red-300 rounded"
+                                      />
+                                      <div className="flex gap-1 justify-end">
+                                        <button
+                                          onClick={() => {
+                                            setRejectingDocId(null);
+                                            setRejectionReasonInput('');
+                                          }}
+                                          className="px-2 py-0.5 text-[10px] text-slate-600 bg-slate-200 hover:bg-slate-300 rounded cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          disabled={reviewingDocId === doc.id}
+                                          onClick={() =>
+                                            handleReviewComplianceDoc(
+                                              cp.userId,
+                                              doc.id,
+                                              'REJECTED',
+                                              rejectionReasonInput.trim() || undefined
+                                            )
+                                          }
+                                          className="px-2 py-0.5 text-[10px] text-white bg-red-600 hover:bg-red-700 rounded font-bold cursor-pointer"
+                                        >
+                                          Confirm Reject
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <button
+                                        disabled={reviewingDocId === doc.id || doc.status === 'VERIFIED'}
+                                        onClick={() => handleReviewComplianceDoc(cp.userId, doc.id, 'VERIFIED')}
+                                        className={`flex-1 py-1 text-[10px] font-bold rounded cursor-pointer transition-colors ${
+                                          doc.status === 'VERIFIED'
+                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                        }`}
+                                      >
+                                        {doc.status === 'VERIFIED' ? '✓ Verified' : 'Verify'}
+                                      </button>
+                                      <button
+                                        disabled={reviewingDocId === doc.id}
+                                        onClick={() => {
+                                          setRejectingDocId(doc.id);
+                                          setRejectionReasonInput('');
+                                        }}
+                                        className="py-1 px-2 text-[10px] font-bold text-red-700 bg-red-100 hover:bg-red-200 rounded cursor-pointer"
+                                      >
+                                        Reject
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-slate-400 italic">No document submitted yet.</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Commercial Mobility Payments & Gateway Transactions */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-teal-600" />
+              Commercial Mobility Payments & Gateway Transactions
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Authoritative transaction ledger for booking accompaniment fares. Amount is strictly server-derived.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold">
+              Total Volume: {payments.length}
+            </span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-bold">
+              Settled: ₹{payments.filter((p) => p.status === 'SUCCESS').reduce((sum, p) => sum + p.amount, 0)}
+            </span>
+          </div>
+        </div>
+
+        {/* Transactions Table */}
+        {payments.length === 0 ? (
+          <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+            No commercial payment orders recorded yet. Initiate a booking accompaniment payment to generate transaction records.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                <tr>
+                  <th className="p-3">Payment ID / Ref</th>
+                  <th className="p-3">Receipt #</th>
+                  <th className="p-3">Journey ID</th>
+                  <th className="p-3">Amount</th>
+                  <th className="p-3">Provider</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3">Created / Paid At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                {payments.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="p-3 text-slate-900 font-bold">{p.id.slice(0, 16)}...</td>
+                    <td className="p-3 text-slate-700">{p.receiptNumber}</td>
+                    <td className="p-3 text-slate-500">{p.journeyId.slice(0, 14)}...</td>
+                    <td className="p-3 text-teal-700 font-bold font-sans text-xs">₹{p.amount} {p.currency}</td>
+                    <td className="p-3">
+                      <span className="px-2 py-0.5 rounded text-[10px] bg-slate-100 text-slate-700 border border-slate-200">
+                        {p.provider}
+                      </span>
+                    </td>
+                    <td className="p-3 font-sans">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          p.status === 'SUCCESS'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : p.status === 'FAILED'
+                            ? 'bg-red-100 text-red-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {p.status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-slate-500 font-sans text-[11px]">
+                      {p.paidAt ? new Date(p.paidAt).toLocaleString() : new Date(p.createdAt).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Global Pricing Policy Configuration Management */}
