@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../auth/index.ts';
 import { UserRole } from '../../domain/types/user.ts';
 import { neravuApi } from '../../services/api-client.ts';
@@ -62,18 +62,42 @@ const ROLE_CONFIG: Record<
 type AuthStep = 'PHONE_ENTRY' | 'OTP_VERIFY' | 'REGISTRATION';
 
 export const DevLoginScreen: React.FC = () => {
-  const { availableDevIdentities, loginAsDevRole, requestOtp, verifyOtp, registerUser, isLoading } =
-    useAuth();
+  const {
+    availableDevIdentities,
+    loginAsDevRole,
+    requestOtp,
+    verifyOtp,
+    registerUser,
+    isLoading,
+    activeOtpChallenge,
+    devOtpCode,
+    clearActiveOtpChallenge,
+    fetchDevOtp,
+  } = useAuth();
 
   const isDevEnvironment =
     typeof import.meta !== 'undefined' && import.meta.env ? !import.meta.env.PROD : true;
 
-  const [step, setStep] = useState<AuthStep>('PHONE_ENTRY');
-  const [phoneNumber, setPhoneNumber] = useState<string>('');
-  const [referenceId, setReferenceId] = useState<string>('');
+  const [step, setStep] = useState<AuthStep>(() => {
+    if (activeOtpChallenge && activeOtpChallenge.expiresAt > Date.now()) {
+      return 'OTP_VERIFY';
+    }
+    return 'PHONE_ENTRY';
+  });
+  const [phoneNumber, setPhoneNumber] = useState<string>(() => {
+    return activeOtpChallenge?.phoneNumber || '';
+  });
+  const [referenceId, setReferenceId] = useState<string>(() => {
+    return activeOtpChallenge?.referenceId || '';
+  });
   const [otpCode, setOtpCode] = useState<string>('');
-  const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
-  const [expiresInSeconds, setExpiresInSeconds] = useState<number>(300);
+
+  const [secondsLeft, setSecondsLeft] = useState<number>(() => {
+    if (activeOtpChallenge) {
+      return Math.max(0, Math.ceil((activeOtpChallenge.expiresAt - Date.now()) / 1000));
+    }
+    return 300;
+  });
 
   const [fullName, setFullName] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<'PATIENT' | 'CARE_PARTNER' | 'FAMILY_CONTACT'>('PATIENT');
@@ -82,31 +106,70 @@ export const DevLoginScreen: React.FC = () => {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [showDevPanel, setShowDevPanel] = useState<boolean>(false);
 
+  // Synchronize step and referenceId on initial remount if active challenge was loaded from storage
+  useEffect(() => {
+    if (activeOtpChallenge && activeOtpChallenge.expiresAt > Date.now()) {
+      setPhoneNumber(activeOtpChallenge.phoneNumber);
+      setReferenceId(activeOtpChallenge.referenceId);
+      if (step === 'PHONE_ENTRY') {
+        setStep('OTP_VERIFY');
+      }
+    }
+  }, [activeOtpChallenge, step]);
+
+  // Countdown timer effect
+  useEffect(() => {
+    if (step !== 'OTP_VERIFY' || !activeOtpChallenge) return;
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((activeOtpChallenge.expiresAt - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [step, activeOtpChallenge]);
+
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSubmitting(true);
-    setDevOtpPreview(null);
 
     try {
       const normalized = phoneNumber.trim();
       const result = await requestOtp(normalized);
       setReferenceId(result.referenceId);
-      setExpiresInSeconds(result.expiresInSeconds);
       setOtpCode('');
       setStep('OTP_VERIFY');
-
-      if (isDevEnvironment) {
-        const preview = await neravuApi.getDevOtpPreview(result.referenceId);
-        if (preview) {
-          setDevOtpPreview(preview);
-        }
-      }
     } catch (err: any) {
       setErrorMessage(err?.userFriendlyMessage || err?.message || 'Failed to send verification code.');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleResendOtp = async () => {
+    setErrorMessage(null);
+    setSubmitting(true);
+
+    try {
+      const normalized = phoneNumber.trim();
+      const result = await requestOtp(normalized);
+      setReferenceId(result.referenceId);
+      setOtpCode('');
+    } catch (err: any) {
+      setErrorMessage(err?.userFriendlyMessage || err?.message || 'Failed to resend verification code.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleChangeNumber = () => {
+    clearActiveOtpChallenge();
+    setStep('PHONE_ENTRY');
+    setOtpCode('');
+    setErrorMessage(null);
   };
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
@@ -117,7 +180,7 @@ export const DevLoginScreen: React.FC = () => {
     try {
       const result = await verifyOtp({
         phoneNumber: phoneNumber.trim(),
-        referenceId,
+        referenceId: referenceId || activeOtpChallenge?.referenceId || '',
         code: otpCode.trim(),
       });
 
@@ -198,7 +261,7 @@ export const DevLoginScreen: React.FC = () => {
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 {step === 'PHONE_ENTRY' && 'Enter your registered mobile number for instant secure access.'}
-                {step === 'OTP_VERIFY' && `6-digit code sent to ${phoneNumber} (valid for ${Math.ceil(expiresInSeconds / 60)}m).`}
+                {step === 'OTP_VERIFY' && `6-digit code sent to ${phoneNumber} (valid for ${Math.ceil(secondsLeft / 60)}m).`}
                 {step === 'REGISTRATION' && `Number ${phoneNumber} verified successfully. Please choose your role.`}
               </p>
             </div>
@@ -254,9 +317,18 @@ export const DevLoginScreen: React.FC = () => {
           {step === 'OTP_VERIFY' && (
             <form onSubmit={handleVerifyOtp} className="space-y-5">
               <div>
-                <label htmlFor="otp-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  6-Digit OTP Code
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label htmlFor="otp-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    6-Digit OTP Code
+                  </label>
+                  <span className={`text-xs font-mono font-medium ${secondsLeft < 30 ? 'text-rose-600 font-bold' : 'text-slate-500'}`}>
+                    {secondsLeft > 0 ? (
+                      `Expires in ${Math.floor(secondsLeft / 60)}m ${String(secondsLeft % 60).padStart(2, '0')}s`
+                    ) : (
+                      <span className="text-rose-600 font-semibold">Expired</span>
+                    )}
+                  </span>
+                </div>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                     <KeyRound className="w-4 h-4" />
@@ -269,26 +341,96 @@ export const DevLoginScreen: React.FC = () => {
                     value={otpCode}
                     onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
                     placeholder="123456"
+                    disabled={secondsLeft === 0}
                     required
-                    className="w-full pl-10 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-slate-900 font-mono text-xl tracking-[0.3em] text-center font-bold focus:outline-none focus:ring-2 focus:ring-teal-600 focus:bg-white transition-all shadow-2xs"
+                    className="w-full pl-10 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-slate-50/50 text-slate-900 font-mono text-xl tracking-[0.3em] text-center font-bold focus:outline-none focus:ring-2 focus:ring-teal-600 focus:bg-white disabled:opacity-50 transition-all shadow-2xs"
                   />
                 </div>
+              </div>
+
+              {/* Development OTP Banner - Clearly labelled development-only message */}
+              {isDevEnvironment && devOtpCode && secondsLeft > 0 && (
+                <div
+                  data-testid="development-otp-banner"
+                  className="bg-amber-50/95 border-2 border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-xs animate-fadeIn"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-amber-200/80 text-amber-900 flex items-center justify-center shrink-0">
+                      <Terminal className="w-4.5 h-4.5" />
+                    </div>
+                    <div>
+                      <span className="text-[11px] font-extrabold uppercase tracking-widest text-amber-900 block">
+                        DEVELOPMENT OTP
+                      </span>
+                      <span className="text-[11px] text-amber-800 font-medium">
+                        Use the actual generated development OTP
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    <span
+                      data-testid="dev-otp-code"
+                      className="font-mono font-black text-xl tracking-[0.25em] bg-white px-3.5 py-1.5 rounded-xl border-2 border-amber-400 text-amber-950 shadow-inner select-all"
+                    >
+                      {devOtpCode}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setOtpCode(devOtpCode)}
+                      className="text-[11px] font-semibold text-amber-800 hover:text-amber-950 bg-amber-200/60 hover:bg-amber-200 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                      title="Auto-fill verification code"
+                    >
+                      Auto-Fill
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Expired OTP Message */}
+              {secondsLeft === 0 && (
+                <div
+                  role="alert"
+                  className="bg-rose-50 border border-rose-200 text-rose-900 rounded-2xl p-4 flex items-start gap-3 text-xs sm:text-sm shadow-sm animate-fadeIn"
+                >
+                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="leading-relaxed">
+                    <p className="font-semibold text-rose-950">Verification Code Expired</p>
+                    <p className="text-rose-800 text-xs mt-0.5">
+                      The verification code for {phoneNumber} has expired. Please request a new code.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-xs pt-0.5 text-slate-500">
+                <button
+                  type="button"
+                  onClick={handleChangeNumber}
+                  className="text-teal-700 hover:text-teal-800 font-medium underline underline-offset-2 cursor-pointer"
+                >
+                  Change phone number
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResendOtp}
+                  disabled={submitting}
+                  className="text-slate-600 hover:text-slate-900 font-medium underline underline-offset-2 disabled:opacity-40 cursor-pointer"
+                >
+                  {submitting ? 'Sending...' : 'Request new code'}
+                </button>
               </div>
 
               <div className="flex items-center gap-3 pt-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    setStep('PHONE_ENTRY');
-                    setErrorMessage(null);
-                  }}
+                  onClick={handleChangeNumber}
                   className="px-5 py-3 rounded-2xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-semibold transition-colors cursor-pointer"
                 >
                   Change Number
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || isLoading || otpCode.length !== 6}
+                  disabled={submitting || isLoading || otpCode.length !== 6 || secondsLeft === 0}
                   className="flex-1 bg-teal-600 hover:bg-teal-700 active:scale-[0.99] disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center gap-2 text-sm shadow-md shadow-teal-600/20 cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
@@ -380,6 +522,45 @@ export const DevLoginScreen: React.FC = () => {
               <span className="text-[10px] text-slate-500 mt-0.5">Privacy & Emergency Support</span>
             </div>
           </div>
+
+          {/* Development Testing Quick Panel - Explicit Test Action Only */}
+          {isDevEnvironment && (
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowDevPanel((prev) => !prev)}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Developer Persona Testing (Dev Mode Only)</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                    {showDevPanel ? 'Hide' : 'Show'}
+                  </span>
+                </button>
+              </div>
+              {showDevPanel && (
+                <div className="mt-3 p-3 bg-amber-50/60 border border-amber-200/80 rounded-2xl animate-fadeIn">
+                  <p className="text-[11px] text-amber-900 mb-2 font-medium">
+                    Explicit test action: Select a role persona to test workflows directly.
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(['PATIENT', 'CARE_PARTNER', 'FAMILY_CONTACT', 'ADMIN'] as const).map((role) => (
+                      <button
+                        key={role}
+                        type="button"
+                        onClick={() => loginAsDevRole(role)}
+                        disabled={isLoading || submitting}
+                        className="px-2.5 py-2 text-xs font-semibold rounded-xl bg-white border border-amber-300 text-slate-800 hover:bg-amber-100/60 active:scale-95 transition-all text-center shadow-2xs cursor-pointer"
+                      >
+                        {role === 'CARE_PARTNER' ? 'Partner' : role === 'FAMILY_CONTACT' ? 'Family' : role === 'PATIENT' ? 'Patient' : 'Admin'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

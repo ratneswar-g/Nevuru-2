@@ -58,9 +58,13 @@ async function bootstrapServer() {
   const domainStore = new PostgresDomainStore(dbDriver);
   const journeyService = new JourneyService(domainStore);
 
-  if (!isProduction) {
-    console.log("[Neravu Server] Development/Test environment: Seeding initial domain demo fixtures...");
+  const shouldSeedDemoData = !isProduction && process.env.ENABLE_DEV_DEMO_SEED === "true";
+
+  if (shouldSeedDemoData) {
+    console.log("[Neravu Server] Development environment with ENABLE_DEV_DEMO_SEED=true: Seeding initial domain demo fixtures...");
     await journeyService.seedInitialDomainData();
+  } else if (!isProduction) {
+    console.log("[Neravu Server] Development environment: Automatic demo seeding is disabled (set ENABLE_DEV_DEMO_SEED=true to opt-in).");
   } else {
     console.log("[Neravu Server] Production environment: Demo data seeding strictly disabled.");
   }

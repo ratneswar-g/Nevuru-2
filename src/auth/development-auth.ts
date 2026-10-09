@@ -55,8 +55,8 @@ export class DevelopmentAuthProvider implements IDevAuthService {
       return this.inMemorySession;
     }
 
-    // Attempt restoration from browser storage if in browser environment
-    return this.restoreSession();
+    // Normal startup must NOT auto-restore development personas
+    return null;
   }
 
   async getCurrentUser(): Promise<AuthUser | null> {

@@ -71,7 +71,11 @@ export class JourneyService {
     this.store = customStore || new PersistentDomainStore();
     this.notificationProvider = notificationProvider;
     this.notificationService = new NotificationService(this.store, notificationProvider);
-    if (typeof process === 'undefined' || process.env?.NODE_ENV !== 'production') {
+    if (
+      typeof process !== 'undefined' &&
+      process.env?.NODE_ENV !== 'production' &&
+      process.env?.ENABLE_DEV_DEMO_SEED === 'true'
+    ) {
       this.seedInitialDomainData();
     }
   }

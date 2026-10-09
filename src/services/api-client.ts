@@ -44,6 +44,7 @@ export interface ApiClientConfig {
 
 export const PROD_AUTH_STORAGE_KEY = 'neravu_auth_session';
 export const DEV_AUTH_STORAGE_KEY = 'neravu_dev_auth_session';
+export const ACTIVE_OTP_CHALLENGE_STORAGE_KEY = 'neravu_active_otp_challenge';
 
 export class NeravuApiClient {
   private baseUrl: string;
