@@ -33,7 +33,8 @@ import {
   evaluateCarePartnerCompliance,
 } from '../domain/index.ts';
 import { createFallbackRouteLeg } from '../maps/geo-utils.ts';
-import { AuthUser, authorizeAction, getFamilyAccessScope } from '../auth/index.ts';
+import { AuthUser } from '../auth/types.ts';
+import { authorizeAction, getFamilyAccessScope } from '../auth/authorization.ts';
 import { resolveSmsOtpProvider, NotificationProvider } from '../server/auth/sms-provider.ts';
 import { NotificationService } from './notification-service.ts';
 

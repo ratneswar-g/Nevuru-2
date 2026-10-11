@@ -194,6 +194,26 @@ export class NeravuApiClient {
         }
       }
 
+      // On 404 NOT_FOUND, 5xx SERVER_ERROR, notify global listeners (such as AuthContext)
+      if ((status === 404 || status >= 500) && typeof window !== 'undefined') {
+        try {
+          const reqUrl = (res as any)?._requestUrl || res.url || '';
+          window.dispatchEvent(
+            new CustomEvent('neravu-api-error', {
+              detail: {
+                status,
+                code,
+                message,
+                actionName: fallbackActionName,
+                url: reqUrl,
+              },
+            })
+          );
+        } catch {
+          // Ignore event dispatch failure
+        }
+      }
+
       throw new ApiError(status, code, message);
     }
 
@@ -202,8 +222,25 @@ export class NeravuApiClient {
 
   private async safeFetch(url: string, init?: RequestInit, actionName = 'Request'): Promise<Response> {
     try {
-      return await fetch(url, init);
+      const res = await fetch(url, init);
+      (res as any)._requestUrl = url;
+      return res;
     } catch (networkErr: any) {
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(
+            new CustomEvent('neravu-api-error', {
+              detail: {
+                status: 0,
+                code: 'NETWORK_FAILURE',
+                message: 'Unable to connect to the Neravu server. Please check your network connection.',
+                actionName,
+                url,
+              },
+            })
+          );
+        } catch {}
+      }
       throw new ApiError(
         0,
         'NETWORK_FAILURE',

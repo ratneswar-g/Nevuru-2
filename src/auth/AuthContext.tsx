@@ -24,6 +24,17 @@ export interface ActiveOtpChallenge {
   retryAfterSeconds?: number;
 }
 
+export interface AuthErrorToast {
+  id: string;
+  status: number;
+  title: string;
+  message: string;
+  details?: string;
+  actionName?: string;
+  endpoint?: string;
+  timestamp: number;
+}
+
 export interface AuthContextValue {
   currentUser: AuthUser | null;
   currentSession: AuthSession | null;
@@ -40,6 +51,9 @@ export interface AuthContextValue {
   devOtpCode: string | null;
   clearActiveOtpChallenge: () => void;
   fetchDevOtp: (referenceId: string) => Promise<string | null>;
+  errorToast: AuthErrorToast | null;
+  dismissErrorToast: () => void;
+  triggerErrorToast: (toast: Omit<AuthErrorToast, 'id' | 'timestamp'>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -83,6 +97,93 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
   });
 
   const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
+
+  // Global Error Toast state for Auth context (catches 404/500/network errors)
+  const [errorToast, setErrorToast] = useState<AuthErrorToast | null>(null);
+
+  const dismissErrorToast = useCallback(() => {
+    setErrorToast(null);
+  }, []);
+
+  const triggerErrorToast = useCallback(
+    (toast: Omit<AuthErrorToast, 'id' | 'timestamp'>) => {
+      setErrorToast({
+        ...toast,
+        id: `toast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: Date.now(),
+      });
+    },
+    []
+  );
+
+  // Listen for 404/500/network failure events from api-client affecting the Auth context
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleApiError = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        status: number;
+        code: string;
+        message: string;
+        actionName?: string;
+        url?: string;
+      }>;
+      const detail = customEvent.detail;
+      if (!detail) return;
+
+      const isAuthRelated =
+        (detail.url && detail.url.includes('/api/auth')) ||
+        (detail.actionName &&
+          [
+            'Request OTP',
+            'Verify OTP',
+            'Register user',
+            'Verify session',
+            'Logout session',
+            'Development login',
+            'Session Verification',
+          ].includes(detail.actionName));
+
+      if ((detail.status === 404 || detail.status >= 500 || detail.status === 0) && isAuthRelated) {
+        const is404 = detail.status === 404;
+        const is500 = detail.status >= 500;
+        const isNetwork = detail.status === 0;
+
+        const title = is404
+          ? 'Auth Endpoint Not Found (404)'
+          : is500
+          ? 'Auth Server Error (500)'
+          : 'Auth Connection Failure';
+
+        let diagnosticHint = '';
+        if (is404) {
+          diagnosticHint = detail.url
+            ? `Endpoint ${detail.url} was not found (HTTP 404). If running on static hosting (e.g. Netlify), check backend routing or API proxy configuration.`
+            : 'The requested authentication endpoint was not found on this server.';
+        } else if (is500) {
+          diagnosticHint =
+            'The server encountered an internal error while processing the authentication request. Check backend logs.';
+        } else if (isNetwork) {
+          diagnosticHint =
+            'Unable to reach the backend server. Please check network connectivity or backend host availability.';
+        }
+
+        triggerErrorToast({
+          status: detail.status,
+          title,
+          message: detail.message || (is404 ? 'The requested resource was not found.' : 'Server error occurred.'),
+          details: diagnosticHint,
+          actionName: detail.actionName,
+          endpoint: detail.url,
+        });
+      }
+    };
+
+    window.addEventListener('neravu-api-error', handleApiError);
+    return () => {
+      window.removeEventListener('neravu-api-error', handleApiError);
+    };
+  }, [triggerErrorToast]);
 
   // One-shot restoration watcher on page reloads (only runs once on mount)
   useEffect(() => {
@@ -150,8 +251,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         if (mounted) {
           setCurrentSession(null);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to initialize session:', err);
+        if (err?.status === 404 || err?.status >= 500 || err?.status === 0) {
+          triggerErrorToast({
+            status: err.status ?? 500,
+            title:
+              err.status === 404
+                ? 'Session Endpoint Not Found (404)'
+                : err.status >= 500
+                ? 'Session Verification Error (500)'
+                : 'Session Connection Failure',
+            message:
+              err.userFriendlyMessage ||
+              err.message ||
+              'Failed to communicate with authentication service.',
+            details:
+              'Initial background session check failed. The app is running in unauthenticated mode.',
+            actionName: 'Session Verification',
+            endpoint: '/api/auth/session',
+          });
+        }
         if (mounted) {
           setCurrentSession(null);
         }
@@ -166,7 +286,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
     return () => {
       mounted = false;
     };
-  }, [authService, productionAuthService]);
+  }, [authService, productionAuthService, triggerErrorToast]);
 
   // Listen for server 401 UNAUTHENTICATED events to clear expired/revoked sessions immediately
   useEffect(() => {
@@ -197,8 +317,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
             setCurrentSession(serverRes.session);
             return;
           }
-        } catch {
-          // Backend unreachable or in unit test environment — use localDevSession
+        } catch (serverErr: any) {
+          if (serverErr?.status === 404 || serverErr?.status >= 500 || serverErr?.status === 0) {
+            triggerErrorToast({
+              status: serverErr.status ?? 500,
+              title:
+                serverErr.status === 404
+                  ? 'Dev Login Endpoint Not Found (404)'
+                  : 'Dev Login Server Error (500)',
+              message:
+                serverErr.userFriendlyMessage ||
+                serverErr.message ||
+                'Server rejected development persona login. Falling back to local session.',
+              actionName: 'Development login',
+              endpoint: '/api/auth/dev-login',
+            });
+          }
         }
 
         setCurrentSession(localDevSession);
@@ -206,70 +340,111 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         setIsLoading(false);
       }
     },
-    [authService]
+    [authService, triggerErrorToast]
   );
 
   const requestOtp = useCallback(
     async (phoneNumber: string): Promise<OtpRequestResult> => {
       setDevOtpCode(null);
-      const result = await productionAuthService.requestOtp({ phoneNumber });
-
-      const expiresIn = result.expiresInSeconds || 300;
-      const challenge: ActiveOtpChallenge = {
-        phoneNumber: phoneNumber.trim(),
-        referenceId: result.referenceId,
-        expiresInSeconds: expiresIn,
-        expiresAt: Date.now() + expiresIn * 1000,
-        retryAfterSeconds: result.retryAfterSeconds,
-      };
-
       try {
-        if (typeof window !== 'undefined' && window.sessionStorage) {
-          window.sessionStorage.setItem(ACTIVE_OTP_CHALLENGE_STORAGE_KEY, JSON.stringify(challenge));
-        }
-      } catch {}
+        const result = await productionAuthService.requestOtp({ phoneNumber });
 
-      const isDev =
-        typeof import.meta !== 'undefined' && import.meta.env
-          ? !import.meta.env.PROD
-          : process.env.NODE_ENV !== 'production';
+        const expiresIn = result.expiresInSeconds || 300;
+        const challenge: ActiveOtpChallenge = {
+          phoneNumber: phoneNumber.trim(),
+          referenceId: result.referenceId,
+          expiresInSeconds: expiresIn,
+          expiresAt: Date.now() + expiresIn * 1000,
+          retryAfterSeconds: result.retryAfterSeconds,
+        };
 
-      let resolvedDevOtp: string | null = null;
-      if (isDev) {
         try {
-          resolvedDevOtp = await neravuApi.getDevOtpPreview(result.referenceId);
-        } catch {
-          resolvedDevOtp = null;
+          if (typeof window !== 'undefined' && window.sessionStorage) {
+            window.sessionStorage.setItem(ACTIVE_OTP_CHALLENGE_STORAGE_KEY, JSON.stringify(challenge));
+          }
+        } catch {}
+
+        const isDev =
+          typeof import.meta !== 'undefined' && import.meta.env
+            ? !import.meta.env.PROD
+            : process.env.NODE_ENV !== 'production';
+
+        let resolvedDevOtp: string | null = null;
+        if (isDev) {
+          try {
+            resolvedDevOtp = await neravuApi.getDevOtpPreview(result.referenceId);
+          } catch {
+            resolvedDevOtp = null;
+          }
         }
+
+        // Authoritative single-flow exposure: set challenge and devOtpCode simultaneously
+        setActiveOtpChallenge(challenge);
+        setDevOtpCode(resolvedDevOtp);
+
+        return result;
+      } catch (err: any) {
+        if (err?.status === 404 || err?.status >= 500 || err?.status === 0) {
+          triggerErrorToast({
+            status: err.status ?? 500,
+            title:
+              err.status === 404
+                ? 'OTP Endpoint Not Found (404)'
+                : err.status >= 500
+                ? 'OTP Server Error (500)'
+                : 'Connection Failure',
+            message:
+              err.status === 404
+                ? 'The OTP authentication endpoint was not found on this server. If deployed on Netlify, check API proxy configuration.'
+                : err.userFriendlyMessage || err.message || 'Failed to process OTP request.',
+            details:
+              err.status === 404
+                ? 'Netlify/static hosting requires an API reverse proxy rule or backend URL.'
+                : undefined,
+            actionName: 'Request OTP',
+            endpoint: '/api/auth/otp/request',
+          });
+        }
+        throw err;
       }
-
-      // Authoritative single-flow exposure: set challenge and devOtpCode simultaneously
-      setActiveOtpChallenge(challenge);
-      setDevOtpCode(resolvedDevOtp);
-
-      return result;
     },
-    [productionAuthService]
+    [productionAuthService, triggerErrorToast]
   );
 
   const verifyOtp = useCallback(
     async (params: OtpVerificationParams): Promise<OtpVerificationFullResult> => {
-      const result = await productionAuthService.verifyOtpChallenge(params);
-      if (result.success) {
-        setActiveOtpChallenge(null);
-        setDevOtpCode(null);
-        try {
-          if (typeof window !== 'undefined' && window.sessionStorage) {
-            window.sessionStorage.removeItem(ACTIVE_OTP_CHALLENGE_STORAGE_KEY);
-          }
-        } catch {}
+      try {
+        const result = await productionAuthService.verifyOtpChallenge(params);
+        if (result.success) {
+          setActiveOtpChallenge(null);
+          setDevOtpCode(null);
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem(ACTIVE_OTP_CHALLENGE_STORAGE_KEY);
+            }
+          } catch {}
+        }
+        if (!result.requiresRegistration && result.session) {
+          setCurrentSession(result.session);
+        }
+        return result;
+      } catch (err: any) {
+        if (err?.status === 404 || err?.status >= 500 || err?.status === 0) {
+          triggerErrorToast({
+            status: err.status ?? 500,
+            title:
+              err.status === 404
+                ? 'Verify OTP Route Not Found (404)'
+                : 'Verify OTP Server Error (500)',
+            message: err.userFriendlyMessage || err.message || 'Failed to verify OTP with server.',
+            actionName: 'Verify OTP',
+            endpoint: '/api/auth/otp/verify',
+          });
+        }
+        throw err;
       }
-      if (!result.requiresRegistration && result.session) {
-        setCurrentSession(result.session);
-      }
-      return result;
     },
-    [productionAuthService]
+    [productionAuthService, triggerErrorToast]
   );
 
   const clearActiveOtpChallenge = useCallback(() => {
@@ -306,11 +481,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
         const { user, session } = await productionAuthService.registerNewUser(params);
         setCurrentSession(session);
         return user;
+      } catch (err: any) {
+        if (err?.status === 404 || err?.status >= 500 || err?.status === 0) {
+          triggerErrorToast({
+            status: err.status ?? 500,
+            title:
+              err.status === 404
+                ? 'Registration Route Not Found (404)'
+                : 'Registration Server Error (500)',
+            message: err.userFriendlyMessage || err.message || 'Failed to complete registration.',
+            actionName: 'Register user',
+            endpoint: '/api/auth/register',
+          });
+        }
+        throw err;
       } finally {
         setIsLoading(false);
       }
     },
-    [productionAuthService]
+    [productionAuthService, triggerErrorToast]
   );
 
   const logout = useCallback(async () => {
@@ -361,6 +550,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({
     devOtpCode,
     clearActiveOtpChallenge,
     fetchDevOtp,
+    errorToast,
+    dismissErrorToast,
+    triggerErrorToast,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

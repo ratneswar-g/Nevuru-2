@@ -31,7 +31,10 @@ const PREFIX_JOURNEY = 'neravu:journey:';
 const PREFIX_PAYMENT = 'neravu:payment:';
 
 export class PersistentUserRepository implements IUserRepository {
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  private adapter: IPersistenceStorageAdapter;
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findById(id: string): Promise<User | null> {
     if (!id || typeof id !== 'string') return null;
@@ -65,7 +68,10 @@ export class PersistentUserRepository implements IUserRepository {
 }
 
 export class PersistentPatientProfileRepository implements IPatientProfileRepository {
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  private adapter: IPersistenceStorageAdapter;
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findByUserId(userId: string): Promise<PatientProfile | null> {
     if (!userId || typeof userId !== 'string') return null;
@@ -93,7 +99,10 @@ export class PersistentPatientProfileRepository implements IPatientProfileReposi
 }
 
 export class PersistentCarePartnerProfileRepository implements ICarePartnerProfileRepository {
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  private adapter: IPersistenceStorageAdapter;
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findByUserId(userId: string): Promise<CarePartnerProfile | null> {
     if (!userId || typeof userId !== 'string') return null;
@@ -135,8 +144,11 @@ export class PersistentCarePartnerProfileRepository implements ICarePartnerProfi
 }
 
 export class PersistentHospitalRepository implements IHospitalRepository {
+  private adapter: IPersistenceStorageAdapter;
   private seeded = false;
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findById(id: string): Promise<HospitalDestination | null> {
     if (!id || typeof id !== 'string') return null;
@@ -200,7 +212,10 @@ export class PersistentHospitalRepository implements IHospitalRepository {
 }
 
 export class PersistentJourneyRepository implements IJourneyRepository {
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  private adapter: IPersistenceStorageAdapter;
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findById(id: string): Promise<Journey | null> {
     if (!id || typeof id !== 'string') return null;
@@ -256,7 +271,10 @@ export class PersistentJourneyRepository implements IJourneyRepository {
 }
 
 export class PersistentPaymentRepository implements IPaymentRepository {
-  constructor(private adapter: IPersistenceStorageAdapter) {}
+  private adapter: IPersistenceStorageAdapter;
+  constructor(adapter: IPersistenceStorageAdapter) {
+    this.adapter = adapter;
+  }
 
   async findById(id: string): Promise<PaymentOrder | null> {
     if (!id) return null;

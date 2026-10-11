@@ -4,11 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
-    "start": "node server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "start": "node dist/server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/development-otp-ux-visibility.test.ts && tsx test/task-1-otp-and-dev-session-flow.test.ts && tsx test/production-hardening-blockers.test.ts && tsx test/phase-8-pickup-verification-pin.test.ts && tsx test/phase-8-live-location-and-eta.test.ts && tsx test/phase-8-sos-operational-escalation.test.ts && tsx test/phase-8-care-partner-compliance.test.ts && tsx test/phase-8-commercial-payments.test.ts && tsx test/phase-8-milestone-notifications.test.ts",
-    "test:all": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/development-otp-ux-visibility.test.ts && tsx test/auth-and-rbac.test.ts && tsx test/journey-state-machine.test.ts && tsx test/maps-and-routing.test.ts && tsx test/pricing-and-emergency.test.ts && tsx test/role-workflows.test.ts && tsx test/phase-6c-frontend-backend-integration.test.ts && tsx test/phase-8-pickup-verification-pin.test.ts && tsx test/phase-8-live-location-and-eta.test.ts && tsx test/phase-8-sos-operational-escalation.test.ts && tsx test/phase-8-care-partner-compliance.test.ts && tsx test/phase-8-commercial-payments.test.ts && tsx test/phase-8-milestone-notifications.test.ts",
+    "test": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/development-otp-ux-visibility.test.ts && tsx test/task-1-otp-and-dev-session-flow.test.ts && tsx test/production-hardening-blockers.test.ts && tsx test/phase-8-pickup-verification-pin.test.ts && tsx test/phase-8-live-location-and-eta.test.ts && tsx test/phase-8-sos-operational-escalation.test.ts && tsx test/phase-8-care-partner-compliance.test.ts && tsx test/phase-8-commercial-payments.test.ts && tsx test/phase-8-milestone-notifications.test.ts && tsx test/netlify-functions.test.ts",
+    "test:all": "tsx test/backend-and-postgres.test.ts && tsx test/phase-7-duplicate-journey-remediation.test.ts && tsx test/phase-7-production-seed-remediation.test.ts && tsx test/phase-7-auth-and-sessions.test.ts && tsx test/development-otp-ux-visibility.test.ts && tsx test/auth-and-rbac.test.ts && tsx test/journey-state-machine.test.ts && tsx test/maps-and-routing.test.ts && tsx test/pricing-and-emergency.test.ts && tsx test/role-workflows.test.ts && tsx test/phase-6c-frontend-backend-integration.test.ts && tsx test/phase-8-pickup-verification-pin.test.ts && tsx test/phase-8-live-location-and-eta.test.ts && tsx test/phase-8-sos-operational-escalation.test.ts && tsx test/phase-8-care-partner-compliance.test.ts && tsx test/phase-8-commercial-payments.test.ts && tsx test/phase-8-milestone-notifications.test.ts && tsx test/netlify-functions.test.ts",
     "migrate": "tsx src/server/db/migrate.ts",
     "reset:data": "tsx scripts/reset-dev-data.ts"
   },
@@ -24,6 +24,7 @@
     "pg": "^8.23.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "serverless-http": "^4.0.0",
     "tsx": "^4.21.0",
     "vite": "^8.3.0"
   },

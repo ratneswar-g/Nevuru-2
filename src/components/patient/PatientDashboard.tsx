@@ -20,6 +20,8 @@ import {
   ArrowRight,
   Sparkles,
 } from 'lucide-react';
+import { JourneyMiniRouteMap } from '../common/JourneyMiniRouteMap.tsx';
+import { JourneyActivityTimeline } from '../common/JourneyActivityTimeline.tsx';
 
 interface PatientDashboardProps {
   journeys: Journey[];
@@ -592,47 +594,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                         </div>
 
                         {/* Journey Milestones / Status Updates */}
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
-                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
-                              Milestone History & Status Updates
-                            </span>
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {journey.stateHistory?.length || 1} Events
-                            </span>
-                          </div>
-
-                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                            {journey.stateHistory && journey.stateHistory.length > 0 ? (
-                              journey.stateHistory.map((step, idx) => (
-                                <div
-                                  key={idx}
-                                  className="flex items-start gap-2.5 pb-2 border-b border-slate-100 last:border-0"
-                                >
-                                  <div className="w-2 h-2 rounded-full bg-teal-500 mt-1.5 shrink-0" />
-                                  <div className="flex-1 text-[11px]">
-                                    <div className="flex items-center justify-between">
-                                      <span className="font-bold text-slate-900">
-                                        {step.toState.replace(/_/g, ' ')}
-                                      </span>
-                                      <span className="text-[10px] text-slate-400 font-mono">
-                                        {formatDate(step.timestamp)}
-                                      </span>
-                                    </div>
-                                    {step.note && (
-                                      <p className="text-slate-600 mt-0.5 leading-snug">
-                                        {step.note}
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="text-slate-500 text-[11px]">
-                                Initial state: {journey.currentState.replace(/_/g, ' ')}
-                              </div>
-                            )}
-                          </div>
+                        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                          <JourneyActivityTimeline
+                            journey={journey}
+                            carePartner={partner}
+                            onViewLiveTracker={onSelectJourney}
+                          />
                         </div>
                       </div>
 
@@ -675,6 +642,15 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                             </span>
                           </div>
                         )}
+                      </div>
+
+                      {/* Interactive Google Maps Mini Route Preview */}
+                      <div className="pt-1">
+                        <JourneyMiniRouteMap
+                          journey={journey}
+                          onOpenLiveTracker={onSelectJourney}
+                          defaultHeight={260}
+                        />
                       </div>
                     </div>
                   )}

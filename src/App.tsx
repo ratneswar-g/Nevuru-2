@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './auth/index.ts';
 import { DevLoginScreen } from './components/auth/DevLoginScreen.tsx';
 import { DevShell } from './components/auth/DevShell.tsx';
+import { GlobalErrorToast } from './components/common/GlobalErrorToast.tsx';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -31,6 +32,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
+      <GlobalErrorToast />
       {quotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
           <span>

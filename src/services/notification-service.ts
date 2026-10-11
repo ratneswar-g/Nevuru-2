@@ -4,10 +4,12 @@ import { resolveSmsOtpProvider, NotificationProvider } from '../server/auth/sms-
 import { maskPhoneNumber } from '../server/auth/crypto-utils.ts';
 
 export class NotificationService {
+  private store: IDomainStore;
   private provider: NotificationProvider;
   private sentMilestones = new Set<string>(); // journeyId:state cache for idempotency / de-duplication
 
-  constructor(private store: IDomainStore, notificationProvider?: NotificationProvider) {
+  constructor(store: IDomainStore, notificationProvider?: NotificationProvider) {
+    this.store = store;
     this.provider = notificationProvider || resolveSmsOtpProvider();
   }
 

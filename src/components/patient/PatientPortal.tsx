@@ -8,6 +8,7 @@ import { JourneyTimeline } from '../common/JourneyTimeline.tsx';
 import { EmergencyModal } from '../common/EmergencyModal.tsx';
 import { NeravuJourneyMap } from '../maps/NeravuJourneyMap.tsx';
 import { PatientDashboard } from './PatientDashboard.tsx';
+import { RecentJourneysDashboard } from '../common/RecentJourneysDashboard.tsx';
 import {
   HeartHandshake,
   Key,
@@ -39,7 +40,7 @@ export const PatientPortal: React.FC = () => {
   const { currentUser } = useAuth();
   const [activeJourney, setActiveJourney] = useState<Journey | null>(null);
   const [allJourneys, setAllJourneys] = useState<Journey[]>([]);
-  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'LIVE_TRACKER'>('DASHBOARD');
+  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'RECENT_JOURNEYS' | 'LIVE_TRACKER'>('DASHBOARD');
   const [patientProfile, setPatientProfile] = useState<PatientProfile | null>(null);
   const [carePartnerProfile, setCarePartnerProfile] = useState<CarePartnerProfile | null>(null);
   const [payments, setPayments] = useState<PaymentOrder[]>([]);
@@ -304,6 +305,19 @@ export const PatientPortal: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setActiveTab('RECENT_JOURNEYS')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                activeTab === 'RECENT_JOURNEYS'
+                  ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <History className="w-3.5 h-3.5 text-teal-600" />
+              <span>Recent Journeys</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('LIVE_TRACKER')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                 activeTab === 'LIVE_TRACKER'
@@ -350,11 +364,21 @@ export const PatientPortal: React.FC = () => {
         </div>
       )}
 
-      {/* VIEW CONDITIONAL: DASHBOARD vs LIVE TRACKER vs BOOKING WIZARD */}
+      {/* VIEW CONDITIONAL: DASHBOARD vs RECENT_JOURNEYS vs LIVE TRACKER vs BOOKING WIZARD */}
       {activeTab === 'DASHBOARD' && !isBookingOpen && (
         <PatientDashboard
           journeys={allJourneys}
           activeJourney={activeJourney}
+          onSelectJourney={(selected) => {
+            setActiveJourney(selected);
+            setActiveTab('LIVE_TRACKER');
+          }}
+          onRequestBooking={() => setIsBookingOpen(true)}
+        />
+      )}
+
+      {activeTab === 'RECENT_JOURNEYS' && !isBookingOpen && (
+        <RecentJourneysDashboard
           onSelectJourney={(selected) => {
             setActiveJourney(selected);
             setActiveTab('LIVE_TRACKER');
@@ -782,9 +806,11 @@ export const PatientPortal: React.FC = () => {
           </div>
 
           {/* Right Column: Real-time Journey Progress Timeline */}
-          <div>
-            <JourneyTimeline currentState={activeJourney.currentState} />
-          </div>
+            <JourneyTimeline
+              currentState={activeJourney.currentState}
+              journey={activeJourney}
+              carePartner={carePartnerProfile}
+            />
         </div>
       )}
 

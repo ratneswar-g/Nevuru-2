@@ -13,12 +13,14 @@ import {
 } from './payment/payment-gateway-adapter.ts';
 
 export class PaymentService {
+  private store: IDomainStore;
   private gateway: IPaymentGatewayProvider;
 
   constructor(
-    private store: IDomainStore,
+    store: IDomainStore,
     gatewayProvider?: IPaymentGatewayProvider
   ) {
+    this.store = store;
     this.gateway = gatewayProvider || getPaymentGatewayProvider();
   }
 

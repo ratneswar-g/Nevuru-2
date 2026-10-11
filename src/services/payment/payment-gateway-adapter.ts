@@ -120,11 +120,12 @@ export class RazorpayPaymentProvider implements IPaymentGatewayProvider {
   }
 
   verifyWebhookSignature(rawBody: string, signature: string): boolean {
-    if (!this.webhookSecret || !signature) return false;
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || this.webhookSecret;
+    if (!secret || !signature) return false;
 
     try {
       const expectedSignature = crypto
-        .createHmac('sha256', this.webhookSecret)
+        .createHmac('sha256', secret)
         .update(rawBody)
         .digest('hex');
 
